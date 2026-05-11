@@ -1,4 +1,4 @@
-# Voyora – AI Travel Planner
+# Vayora – AI Travel Planner
 
   An AI-powered travel planner with visual place search and challenge verification.
 
