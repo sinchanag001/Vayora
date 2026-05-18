@@ -11,11 +11,13 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, origins=["*"])
 
-# Chatbot client
+# Chatbot client — text only
 chat_client = Groq(api_key=os.environ.get("API_KEY"))
 
-# Vision client — separate key for image verification
+# Vision client — all image-based features (challenge verification + visual search)
 vision_client = Groq(api_key=os.environ.get("VISION_API_KEY"))
+
+VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 SYSTEM_PROMPT = """You are Vayora Guide, a warm, knowledgeable, and enthusiastic AI tourism companion for Vayora – a premium travel planning platform. Your personality is friendly, inspiring, and expertly informative.
 
@@ -41,12 +43,63 @@ Guidelines:
 - Sign off longer answers with an inspiring nudge to explore"""
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def extract_json(raw):
+    """Robustly extract a JSON object from a model response."""
+    raw = raw.strip()
+    if "```" in raw:
+        parts = raw.split("```")
+        for part in parts:
+            part = part.strip()
+            if part.lower().startswith("json"):
+                part = part[4:].strip()
+            if part.startswith("{"):
+                raw = part
+                break
+    start = raw.find("{")
+    end   = raw.rfind("}") + 1
+    if start != -1 and end > start:
+        raw = raw[start:end]
+    return json.loads(raw)
+
+
+def vision_request(image_base64, mime_type, prompt_text):
+    """Send an image + prompt to the vision model and return raw text."""
+    valid_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if mime_type not in valid_types:
+        mime_type = "image/jpeg"
+
+    response = vision_client.chat.completions.create(
+        model=VISION_MODEL,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{image_base64}"
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt_text
+                    }
+                ]
+            }
+        ],
+        max_tokens=1024,
+        temperature=0.1,
+    )
+    return response.choices[0].message.content.strip()
+
+
 # ── Chatbot ───────────────────────────────────────────────────────────────────
 
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json()
-
     if not data or "message" not in data:
         return jsonify({"error": "Missing 'message' in request body"}), 400
 
@@ -57,7 +110,7 @@ def chat():
     history = data.get("history", [])
     messages = []
     for entry in history:
-        role = entry.get("role")
+        role    = entry.get("role")
         content = entry.get("content")
         if role in ("user", "assistant") and content:
             messages.append({"role": role, "content": content})
@@ -70,18 +123,16 @@ def chat():
             max_tokens=1024,
             temperature=0.7,
         )
-        reply = completion.choices[0].message.content
-        return jsonify({"reply": reply})
+        return jsonify({"reply": completion.choices[0].message.content})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-# ── Image Verification ────────────────────────────────────────────────────────
+# ── Challenge Verification ────────────────────────────────────────────────────
 
 @app.route("/api/verify-challenge", methods=["POST"])
 def verify_challenge():
     data = request.get_json()
-
     if not data:
         return jsonify({"error": "No data received"}), 400
 
@@ -94,10 +145,10 @@ def verify_challenge():
     if not challenge:
         return jsonify({"error": "No challenge text provided"}), 400
 
-    # Ensure mime_type is a valid image type
-    valid_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
-    if mime_type not in valid_types:
-        mime_type = "image/jpeg"
+    try:
+        base64.b64decode(image_base64, validate=True)
+    except Exception:
+        return jsonify({"error": "Invalid image data"}), 400
 
     prompt = (
         f'The user is trying to complete this travel challenge: "{challenge}"\n\n'
@@ -109,52 +160,75 @@ def verify_challenge():
     )
 
     try:
-        response = vision_client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime_type};base64,{image_base64}"
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
-                    ]
-                }
-            ],
-            max_tokens=256,
-            temperature=0.1,
-        )
-
-        raw = response.choices[0].message.content.strip()
-
-        # Strip markdown fences if present
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.lower().startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
-        # Find JSON object in response even if there's surrounding text
-        start = raw.find("{")
-        end   = raw.rfind("}") + 1
-        if start != -1 and end > start:
-            raw = raw[start:end]
-
-        result   = json.loads(raw)
+        raw      = vision_request(image_base64, mime_type, prompt)
+        result   = extract_json(raw)
         approved = bool(result.get("approved", False))
         reason   = result.get("reason", "Verification complete.")
         return jsonify({"approved": approved, "reason": reason})
-
     except json.JSONDecodeError:
-        # If model didn't return valid JSON, default to not approved
         return jsonify({"approved": False, "reason": "Could not parse AI response. Please try again."}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Visual Search ─────────────────────────────────────────────────────────────
+
+@app.route("/api/visual-search", methods=["POST"])
+def visual_search():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data received"}), 400
+
+    image_base64 = data.get("imageBase64")
+    mime_type    = data.get("mimeType", "image/jpeg")
+
+    if not image_base64:
+        return jsonify({"error": "No image provided"}), 400
+
+    try:
+        base64.b64decode(image_base64, validate=True)
+    except Exception:
+        return jsonify({"error": "Invalid image data"}), 400
+
+    prompt = (
+        'You are an expert travel guide with encyclopaedic knowledge of world destinations.\n\n'
+        'Analyse this travel photo and respond with ONLY a JSON object (no markdown, no extra text) '
+        'in this exact format:\n'
+        '{\n'
+        '  "identified": {\n'
+        '    "name": "Name of the place or landmark (e.g. Santorini, Greece or Angkor Wat, Cambodia)",\n'
+        '    "emoji": "single relevant emoji",\n'
+        '    "description": "2-3 sentence description of what makes this place special"\n'
+        '  },\n'
+        '  "similar": [\n'
+        '    {\n'
+        '      "name": "Place Name",\n'
+        '      "country": "Country Name",\n'
+        '      "flag": "flag emoji",\n'
+        '      "why": "One concise sentence explaining the visual or cultural similarity",\n'
+        '      "match": "85%",\n'
+        '      "tag": "Beach",\n'
+        '      "tagColor": "#00d4b8"\n'
+        '    }\n'
+        '  ]\n'
+        '}\n\n'
+        'Choose tag from: Beach, Mountain, City, Temple, Heritage, Nature, Island, Village, Desert, Forest.\n'
+        'Return exactly 6 similar destinations. Make similarities genuine — consider architecture, '
+        'landscape, atmosphere, colour palette, and cultural character. '
+        'Return ONLY the JSON, nothing else.'
+    )
+
+    try:
+        raw    = vision_request(image_base64, mime_type, prompt)
+        result = extract_json(raw)
+
+        # Validate expected structure
+        if "identified" not in result or "similar" not in result:
+            raise ValueError("Unexpected response structure from AI")
+
+        return jsonify(result)
+    except json.JSONDecodeError:
+        return jsonify({"error": "AI returned an unexpected format. Please try again."}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
