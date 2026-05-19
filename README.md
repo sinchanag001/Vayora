@@ -8,13 +8,13 @@
   # 1. Install dependencies
   npm install
 
-  # 2. Add your Anthropic API key
+  # 2. Add your  API key
   cp .env.example .env
-  # Edit .env and add your key from https://console.anthropic.com
+  # Edit .env and add your key 
 
   # 3. Run the server
   npm start
-  # App opens at http://localhost:3000
+  # App opens at http://localhost:5001
   ```
 
   ## Features
