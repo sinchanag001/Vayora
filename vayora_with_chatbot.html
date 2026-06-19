@@ -3401,6 +3401,7 @@ Traveler profile: ${prefs.who || 'solo'} · ${prefs.vibe || 'chill'} vibe · bud
 
 Every "place" MUST be a real, currently-existing, googleable place in or within day-trip distance of ${focusCity || prefs.country}. Do NOT invent fictional places. Do NOT use generic labels like "Local breakfast", "City walk", "Sunset viewpoint" — always name THE actual place (e.g. "Shanti Stupa", "Trastevere", "Tsukiji Outer Market", "Da Enzo al 29", "Sensō-ji Temple", "Park Güell").
 
+Every "place" MUST be a real, currently-existing, googleable place in ${prefs.country}.
 Return ONLY this JSON shape:
 {
   "summary": "One evocative sentence about why this trip is perfect.",
@@ -5563,6 +5564,86 @@ const cityDB = {
     {name:'Quebec City',safety:9.3,vibes:['heritage','romantic','chill','exploration'],tier:2,fit:['partner','family','solo'],desc:'The only walled city in North America — dramatic Château Frontenac, Old Town UNESCO cobblestones, and a distinctly French soul.'},
     {name:'Banff',safety:9.5,vibes:['nature','adventure','luxury','romantic'],tier:3,fit:['partner','family','friends','solo'],desc:'Jaw-dropping Rocky Mountain national park — turquoise Lake Louise, Moraine Lake, glacier hikes and hot springs surrounded by wildlife.'},
   ],
+  'Switzerland': [
+  {name:'Zurich',safety:9.3,vibes:['trendy','luxury','exploration','heritage'],tier:3,fit:['solo','friends','partner','family'],desc:'Switzerland\'s largest city — Lake Zurich, Bahnhofstrasse shopping, Old Town charm and world-class museums.'},
+  {name:'Lucerne',safety:9.5,vibes:['heritage','romantic','chill','exploration'],tier:3,fit:['partner','family','solo'],desc:'Storybook Swiss city with Chapel Bridge, Lake Lucerne and spectacular mountain scenery.'},
+  {name:'Interlaken',safety:9.4,vibes:['nature','adventure','chill','exploration'],tier:3,fit:['friends','partner','solo','family'],desc:'Adventure capital between two lakes with access to Jungfraujoch, paragliding and alpine experiences.'},
+  {name:'Grindelwald',safety:9.6,vibes:['nature','adventure','luxury','romantic'],tier:3,fit:['partner','solo','friends'],desc:'Charming alpine village beneath the Eiger with hiking trails, cable cars and breathtaking views.'},
+  {name:'Zermatt',safety:9.7,vibes:['luxury','nature','romantic','adventure'],tier:3,fit:['partner','solo','friends','family'],desc:'Home of the Matterhorn with world-class skiing, mountain railways and unforgettable scenery.'},
+  {name:'Geneva',safety:9.2,vibes:['luxury','heritage','trendy','exploration'],tier:2,fit:['solo','partner','friends','family'],desc:'Elegant lakeside city known for Jet d\'Eau, international culture and beautiful waterfront promenades.'},
+  {name:'Bern',safety:9.4,vibes:['heritage','chill','exploration','romantic'],tier:2,fit:['solo','partner','family'],desc:'Switzerland\'s capital featuring a UNESCO-listed Old Town, arcades and riverside views.'},
+  {name:'Lugano',safety:9.3,vibes:['luxury','chill','romantic','nature'],tier:2,fit:['partner','family','solo'],desc:'Mediterranean-style Swiss city with palm-lined lakeshores and stunning mountain scenery.'},
+],
+'Argentina': [
+  {name:'Buenos Aires',safety:8.5,vibes:['party','trendy','heritage','exploration'],tier:3,fit:['solo','friends','partner','family'],desc:'Argentina\'s vibrant capital — tango shows, colourful La Boca streets, historic San Telmo and world-famous steakhouses.'},
+  {name:'Bariloche',safety:9.2,vibes:['nature','adventure','romantic','chill'],tier:3,fit:['partner','friends','family','solo'],desc:'Patagonia\'s alpine paradise — crystal-clear lakes, snow-capped mountains, hiking trails and famous chocolate shops.'},
+  {name:'Mendoza',safety:9.0,vibes:['luxury','romantic','chill','exploration'],tier:3,fit:['partner','friends','solo'],desc:'Argentina\'s wine capital — Malbec vineyards, Andes mountain views and world-class food experiences.'},
+  {name:'El Calafate',safety:9.4,vibes:['nature','adventure','exploration','chill'],tier:3,fit:['solo','friends','partner','family'],desc:'Gateway to Los Glaciares National Park and the spectacular Perito Moreno Glacier.'},
+  {name:'Ushuaia',safety:9.3,vibes:['adventure','nature','exploration','chill'],tier:3,fit:['solo','friends','partner'],desc:'The world\'s southernmost city — Beagle Channel cruises, Tierra del Fuego National Park and dramatic landscapes.'},
+  {name:'Puerto Iguazú',safety:9.1,vibes:['nature','adventure','family','exploration'],tier:3,fit:['family','partner','friends','solo'],desc:'Home to the breathtaking Iguazú Falls, one of the world\'s greatest natural wonders.'},
+  {name:'Salta',safety:8.9,vibes:['heritage','exploration','chill','romantic'],tier:2,fit:['solo','partner','family'],desc:'Colonial architecture, colourful mountain scenery and the famous Train to the Clouds.'},
+  {name:'Córdoba',safety:8.8,vibes:['trendy','party','heritage','exploration'],tier:2,fit:['friends','solo','partner'],desc:'Argentina\'s university city with lively nightlife, historic churches and nearby mountain escapes.'},
+],
+'Philippines': [
+  {name:'Manila',safety:8.2,vibes:['party','heritage','trendy','exploration'],tier:2,fit:['solo','friends','partner','family'],desc:'The bustling capital — Intramuros, Rizal Park, Binondo food trips and a vibrant nightlife scene.'},
+  {name:'Boracay',safety:9.1,vibes:['beach','luxury','party','romantic'],tier:3,fit:['partner','friends','family'],desc:'World-famous White Beach, crystal-clear waters, island hopping and stunning sunsets.'},
+  {name:'Palawan',safety:9.5,vibes:['nature','adventure','romantic','chill'],tier:3,fit:['partner','friends','family','solo'],desc:'Often called the world\'s most beautiful island destination with lagoons, limestone cliffs and turquoise waters.'},
+  {name:'Cebu',safety:8.8,vibes:['adventure','beach','party','exploration'],tier:3,fit:['friends','solo','partner','family'],desc:'Historic city with whale shark encounters, waterfalls, island hopping and vibrant nightlife.'},
+  {name:'Bohol',safety:9.2,vibes:['nature','chill','romantic','family'],tier:2,fit:['family','partner','solo'],desc:'Home to the Chocolate Hills, tarsiers and beautiful river cruises.'},
+  {name:'Siargao',safety:9.3,vibes:['adventure','chill','beach','trendy'],tier:3,fit:['solo','friends','partner'],desc:'The surfing capital of the Philippines with island hopping, lagoons and laid-back vibes.'},
+  {name:'Davao',safety:9.0,vibes:['nature','exploration','family','chill'],tier:2,fit:['family','solo','partner'],desc:'Gateway to Mount Apo, eagle conservation parks and rich Mindanao culture.'},
+  {name:'Vigan',safety:9.1,vibes:['heritage','romantic','exploration','chill'],tier:2,fit:['partner','family','solo'],desc:'UNESCO-listed colonial city with cobblestone streets and Spanish-era architecture.'},
+],
+'Malaysia': [
+  {name:'Kuala Lumpur',safety:8.9,vibes:['trendy','party','luxury','exploration'],tier:3,fit:['solo','friends','partner','family'],desc:'Malaysia\'s vibrant capital — Petronas Towers, rooftop bars, street food markets and world-class shopping.'},
+  {name:'Langkawi',safety:9.4,vibes:['beach','romantic','luxury','chill'],tier:3,fit:['partner','family','friends'],desc:'Tropical island paradise with white-sand beaches, sky bridges and crystal-clear waters.'},
+  {name:'Penang',safety:9.2,vibes:['food','heritage','exploration','trendy'],tier:3,fit:['solo','friends','partner','family'],desc:'Malaysia\'s food capital featuring George Town street art, colonial architecture and legendary hawker cuisine.'},
+  {name:'Cameron Highlands',safety:9.5,vibes:['nature','chill','romantic','exploration'],tier:2,fit:['partner','family','solo'],desc:'Cool mountain retreat known for tea plantations, strawberry farms and scenic hiking trails.'},
+  {name:'Kota Kinabalu',safety:9.1,vibes:['nature','adventure','beach','exploration'],tier:3,fit:['friends','solo','partner','family'],desc:'Gateway to Mount Kinabalu, island hopping adventures and spectacular Borneo sunsets.'},
+  {name:'Malacca',safety:9.3,vibes:['heritage','chill','romantic','exploration'],tier:2,fit:['partner','family','solo'],desc:'UNESCO-listed historic city blending Portuguese, Dutch and Malaysian influences.'},
+  {name:'Perhentian Islands',safety:9.6,vibes:['beach','adventure','nature','chill'],tier:3,fit:['friends','partner','solo'],desc:'Pristine tropical islands with turquoise waters, coral reefs and incredible snorkeling.'},
+  {name:'Johor Bahru',safety:8.8,vibes:['family','trendy','shopping','exploration'],tier:2,fit:['family','friends','solo'],desc:'Modern southern city known for theme parks, shopping districts and easy Singapore access.'},
+],
+'New Zealand': [
+  {name:'Auckland',safety:9.4,vibes:['trendy','exploration','nature','party'],tier:3,fit:['solo','friends','partner','family'],desc:'New Zealand\'s largest city — volcanic viewpoints, waterfront dining, island escapes and a vibrant urban culture.'},
+  {name:'Queenstown',safety:9.7,vibes:['adventure','nature','luxury','romantic'],tier:3,fit:['friends','partner','solo'],desc:'The adventure capital of New Zealand with bungee jumping, jet boating, skiing and stunning alpine scenery.'},
+  {name:'Rotorua',safety:9.3,vibes:['nature','heritage','exploration','family'],tier:2,fit:['family','solo','partner'],desc:'Famous for geothermal wonders, Māori culture, geysers and bubbling mud pools.'},
+  {name:'Wellington',safety:9.2,vibes:['heritage','trendy','food','exploration'],tier:2,fit:['solo','friends','partner'],desc:'The capital city known for its café culture, waterfront, museums and creative arts scene.'},
+  {name:'Christchurch',safety:9.3,vibes:['chill','nature','heritage','exploration'],tier:2,fit:['family','partner','solo'],desc:'The Garden City featuring beautiful parks, riverside attractions and access to the South Island wilderness.'},
+  {name:'Milford Sound',safety:9.8,vibes:['nature','adventure','romantic','chill'],tier:3,fit:['partner','family','solo','friends'],desc:'One of the world\'s most spectacular fjords with waterfalls, cruises and dramatic mountain scenery.'},
+  {name:'Wanaka',safety:9.6,vibes:['nature','chill','romantic','adventure'],tier:3,fit:['partner','solo','friends'],desc:'Picturesque lakeside town offering hiking, skiing and breathtaking South Island landscapes.'},
+  {name:'Taupō',safety:9.4,vibes:['adventure','nature','family','exploration'],tier:2,fit:['family','friends','solo'],desc:'Lakefront destination famous for Huka Falls, geothermal attractions and outdoor adventures.'},
+],
+'Germany': [
+  {name:'Berlin',safety:8.8,vibes:['party','heritage','trendy','exploration'],tier:3,fit:['solo','friends','partner','family'],desc:'Germany\'s vibrant capital — Brandenburg Gate, Berlin Wall history, world-class museums and legendary nightlife.'},
+  {name:'Munich',safety:9.3,vibes:['heritage','luxury','exploration','family'],tier:3,fit:['family','partner','friends','solo'],desc:'Home of Oktoberfest, royal palaces, beer gardens and easy access to the Bavarian Alps.'},
+  {name:'Hamburg',safety:9.0,vibes:['trendy','party','exploration','heritage'],tier:2,fit:['solo','friends','partner'],desc:'Germany\'s great port city with canals, harbour cruises, historic warehouses and lively nightlife.'},
+  {name:'Cologne',safety:9.1,vibes:['heritage','romantic','exploration','chill'],tier:2,fit:['partner','family','solo'],desc:'Famous for its magnificent cathedral, Rhine River views and charming old town atmosphere.'},
+  {name:'Frankfurt',safety:8.9,vibes:['luxury','trendy','exploration','business'],tier:2,fit:['solo','friends','partner'],desc:'Modern skyline city blending finance, culture, museums and traditional German taverns.'},
+  {name:'Dresden',safety:9.2,vibes:['heritage','romantic','chill','exploration'],tier:2,fit:['partner','family','solo'],desc:'Baroque beauty on the Elbe River known for stunning architecture and art collections.'},
+  {name:'Heidelberg',safety:9.4,vibes:['romantic','heritage','chill','exploration'],tier:2,fit:['partner','solo','family'],desc:'Fairytale university town with a hilltop castle and picturesque riverside scenery.'},
+  {name:'Garmisch-Partenkirchen',safety:9.6,vibes:['nature','adventure','romantic','chill'],tier:3,fit:['partner','friends','family','solo'],desc:'Gateway to Germany\'s Alps featuring mountain adventures, lakes and breathtaking scenery.'},
+],
+'South Africa': [
+  {name:'Cape Town',safety:9.2,vibes:['nature','adventure','luxury','romantic'],tier:3,fit:['partner','friends','family','solo'],desc:'South Africa\'s most iconic city — Table Mountain, stunning beaches, vineyards and vibrant waterfront culture.'},
+  {name:'Johannesburg',safety:8.5,vibes:['heritage','trendy','exploration','party'],tier:2,fit:['solo','friends','partner'],desc:'The country\'s largest city with rich history, Soweto tours, museums and a thriving arts scene.'},
+  {name:'Durban',safety:8.9,vibes:['beach','chill','party','family'],tier:2,fit:['family','friends','partner'],desc:'Warm Indian Ocean beaches, famous Golden Mile promenade and incredible multicultural food.'},
+  {name:'Kruger National Park',safety:9.7,vibes:['nature','adventure','luxury','exploration'],tier:3,fit:['family','partner','friends','solo'],desc:'One of Africa\'s greatest safari destinations with Big Five wildlife and luxury game lodges.'},
+  {name:'Stellenbosch',safety:9.5,vibes:['luxury','romantic','chill','heritage'],tier:3,fit:['partner','friends'],desc:'South Africa\'s wine capital featuring vineyards, mountain scenery and gourmet dining.'},
+  {name:'Garden Route',safety:9.4,vibes:['nature','roadtrip','adventure','romantic'],tier:3,fit:['family','partner','friends'],desc:'A spectacular coastal journey filled with forests, lagoons, wildlife and scenic drives.'},
+  {name:'Port Elizabeth',safety:9.0,vibes:['beach','nature','family','chill'],tier:2,fit:['family','partner','solo'],desc:'Friendly coastal city with beaches, marine life and access to nearby safari parks.'},
+  {name:'Drakensberg',safety:9.6,vibes:['nature','adventure','chill','exploration'],tier:3,fit:['solo','partner','friends'],desc:'Dramatic mountain range offering hiking trails, waterfalls and breathtaking landscapes.'},
+],
+'European Union': [
+  {name:'Paris',safety:9.0,vibes:['romantic','luxury','heritage','exploration'],tier:3,fit:['partner','family','solo','friends'],desc:'The City of Light — Eiffel Tower, Louvre Museum, charming cafés and world-famous landmarks.'},
+  {name:'Rome',safety:8.9,vibes:['heritage','romantic','exploration','food'],tier:3,fit:['partner','family','solo','friends'],desc:'Ancient wonders, Vatican City, incredible cuisine and centuries of history around every corner.'},
+  {name:'Barcelona',safety:8.8,vibes:['beach','party','heritage','trendy'],tier:3,fit:['friends','partner','solo'],desc:'Gaudí architecture, Mediterranean beaches, vibrant nightlife and rich Catalan culture.'},
+  {name:'Amsterdam',safety:9.3,vibes:['trendy','chill','exploration','romantic'],tier:3,fit:['solo','friends','partner'],desc:'Canals, cycling culture, world-class museums and picturesque historic streets.'},
+  {name:'Prague',safety:9.4,vibes:['heritage','romantic','chill','exploration'],tier:2,fit:['partner','family','solo'],desc:'Fairytale architecture, medieval squares and one of Europe\'s most beautiful old towns.'},
+  {name:'Vienna',safety:9.5,vibes:['luxury','heritage','romantic','chill'],tier:3,fit:['partner','family','solo'],desc:'Imperial palaces, classical music, coffee houses and elegant city streets.'},
+  {name:'Santorini',safety:9.4,vibes:['romantic','luxury','beach','chill'],tier:3,fit:['partner'],desc:'Whitewashed villages, dramatic cliffs and unforgettable sunsets overlooking the Aegean Sea.'},
+  {name:'Interlaken',safety:9.6,vibes:['nature','adventure','romantic','exploration'],tier:3,fit:['friends','partner','family','solo'],desc:'Swiss alpine paradise with lakes, mountains and adventure sports.'},
+],
 };
 
 // ===== Recommendation engine — score each city against user preferences =====
@@ -8581,7 +8662,495 @@ const cityLandmarks = {
     "Vermilion Lakes sunset drive",
     "Lake Minnewanka boat cruise",
     "Sunshine Village ski area (winter) or wildflower hike (summer)"
-  ]
+  ],
+  "Zurich": [
+  "Bahnhofstrasse",
+  "Lake Zurich",
+  "Grossmünster",
+  "Swiss National Museum",
+  "Lindenhof",
+  "Uetliberg",
+  "Fraumünster",
+  "Zurich Opera House"
+],
+
+"Lucerne": [
+  "Chapel Bridge",
+  "Lion Monument",
+  "Lake Lucerne",
+  "Musegg Wall",
+  "Mount Pilatus",
+  "Mount Rigi",
+  "KKL Lucerne",
+  "Old Town Lucerne"
+],
+
+"Interlaken": [
+  "Harder Kulm",
+  "Lake Thun",
+  "Lake Brienz",
+  "Höhematte Park",
+  "Jungfraujoch",
+  "Schynige Platte",
+  "St. Beatus Caves",
+  "Interlaken Ost"
+],
+
+"Grindelwald": [
+  "First Cliff Walk",
+  "Eiger Trail",
+  "Bachalpsee",
+  "Pfingstegg",
+  "Grindelwald Glacier Canyon",
+  "Männlichen",
+  "First Flyer",
+  "Eiger North Face Viewpoint"
+],
+
+"Zermatt": [
+  "Matterhorn",
+  "Gornergrat",
+  "Sunnegga",
+  "Matterhorn Glacier Paradise",
+  "Five Lakes Walk",
+  "Zermatt Old Village",
+  "Riffelsee",
+  "Gorner Gorge"
+],
+
+"Geneva": [
+  "Jet d'Eau",
+  "St. Pierre Cathedral",
+  "Old Town Geneva",
+  "Palais des Nations",
+  "Lake Geneva",
+  "Broken Chair",
+  "Bains des Pâquis",
+  "Jardin Anglais"
+],
+
+"Paris": [
+  "Eiffel Tower",
+  "Louvre Museum",
+  "Arc de Triomphe",
+  "Notre-Dame Cathedral",
+  "Montmartre",
+  "Champs-Élysées",
+  "Seine River Cruise",
+  "Palace of Versailles"
+],
+
+"Rome": [
+  "Colosseum",
+  "Roman Forum",
+  "Trevi Fountain",
+  "Pantheon",
+  "Vatican Museums",
+  "St. Peter's Basilica",
+  "Spanish Steps",
+  "Piazza Navona"
+],
+
+"Barcelona": [
+  "Sagrada Família",
+  "Park Güell",
+  "La Rambla",
+  "Casa Batlló",
+  "Barceloneta Beach",
+  "Gothic Quarter",
+  "Camp Nou",
+  "Montjuïc"
+],
+
+"Amsterdam": [
+  "Anne Frank House",
+  "Rijksmuseum",
+  "Van Gogh Museum",
+  "Dam Square",
+  "Jordaan District",
+  "Vondelpark",
+  "Canal Cruise",
+  "Heineken Experience"
+],
+"Cape Town": [
+  "Table Mountain",
+  "Cape Point",
+  "Boulders Beach",
+  "V&A Waterfront",
+  "Kirstenbosch Botanical Garden",
+  "Robben Island",
+  "Camps Bay Beach",
+  "Signal Hill"
+],
+
+"Johannesburg": [
+  "Apartheid Museum",
+  "Constitution Hill",
+  "Soweto",
+  "Vilakazi Street",
+  "Gold Reef City",
+  "Maboneng Precinct",
+  "Nelson Mandela Square",
+  "Johannesburg Botanical Garden"
+],
+
+"Durban": [
+  "Golden Mile",
+  "uShaka Marine World",
+  "Moses Mabhida Stadium",
+  "Durban Botanic Gardens",
+  "Umhlanga Rocks",
+  "Suncoast Casino",
+  "Blue Lagoon",
+  "Victoria Street Market"
+],
+
+"Kruger National Park": [
+  "Skukuza Camp",
+  "Lower Sabie",
+  "Crocodile Bridge",
+  "Satara Camp",
+  "Olifants Camp",
+  "God's Window",
+  "Blyde River Canyon",
+  "Panorama Route"
+],
+
+"Stellenbosch": [
+  "Delaire Graff Estate",
+  "Spier Wine Farm",
+  "Tokara Wine Estate",
+  "Stellenbosch University",
+  "Jonkershoek Nature Reserve",
+  "Lanzerac Wine Estate",
+  "Church Street",
+  "Stellenbosch Village Museum"
+],
+
+"Garden Route": [
+  "Knysna Heads",
+  "Tsitsikamma National Park",
+  "Plettenberg Bay",
+  "Wilderness National Park",
+  "Bloukrans Bridge",
+  "Storms River Mouth",
+  "Robberg Nature Reserve",
+  "Knysna Waterfront"
+],
+"Berlin": [
+  "Brandenburg Gate",
+  "Reichstag Building",
+  "Berlin Wall Memorial",
+  "East Side Gallery",
+  "Museum Island",
+  "Checkpoint Charlie",
+  "Alexanderplatz",
+  "Berlin Cathedral"
+],
+
+"Munich": [
+  "Marienplatz",
+  "Nymphenburg Palace",
+  "English Garden",
+  "Viktualienmarkt",
+  "BMW Museum",
+  "Olympiapark",
+  "Residenz Munich",
+  "Hofbräuhaus München"
+],
+
+"Hamburg": [
+  "Miniatur Wunderland",
+  "Elbphilharmonie",
+  "Speicherstadt",
+  "Hamburg Harbour",
+  "St. Michael's Church",
+  "Alster Lake",
+  "Landungsbrücken",
+  "Planten un Blomen"
+],
+
+"Cologne": [
+  "Cologne Cathedral",
+  "Hohenzollern Bridge",
+  "Old Town Cologne",
+  "Chocolate Museum",
+  "Rhine Promenade",
+  "Museum Ludwig",
+  "Great St. Martin Church",
+  "Cologne Cable Car"
+],
+
+"Frankfurt": [
+  "Römerberg",
+  "Main Tower",
+  "Palmengarten",
+  "Städel Museum",
+  "Frankfurt Cathedral",
+  "Iron Footbridge",
+  "Goethe House",
+  "Museumsufer"
+],
+
+"Heidelberg": [
+  "Heidelberg Castle",
+  "Old Bridge",
+  "Philosopher's Walk",
+  "Old Town Heidelberg",
+  "Church of the Holy Spirit",
+  "Königstuhl",
+  "Student Prison",
+  "Market Square Heidelberg"
+],
+
+"Garmisch-Partenkirchen": [
+  "Zugspitze",
+  "Partnach Gorge",
+  "Eibsee",
+  "Olympic Ski Stadium",
+  "AlpspiX Viewpoint",
+  "Wank Mountain",
+  "Kreuzeckbahn",
+  "Riessersee Lake"
+],
+"Auckland": [
+  "Sky Tower",
+  "Auckland Harbour Bridge",
+  "Waiheke Island",
+  "Mount Eden",
+  "Viaduct Harbour",
+  "Auckland Domain",
+  "Mission Bay",
+  "Rangitoto Island"
+],
+
+"Queenstown": [
+  "Skyline Queenstown",
+  "The Remarkables",
+  "Shotover Jet",
+  "Queenstown Gardens",
+  "Lake Wakatipu",
+  "Ben Lomond Track",
+  "Kawarau Bungy Centre",
+  "Arrowtown"
+],
+
+"Rotorua": [
+  "Te Puia",
+  "Wai-O-Tapu Thermal Wonderland",
+  "Redwoods Forest",
+  "Polynesian Spa",
+  "Skyline Rotorua",
+  "Lake Rotorua",
+  "Government Gardens",
+  "Whakarewarewa Village"
+],
+
+"Wellington": [
+  "Te Papa Museum",
+  "Mount Victoria Lookout",
+  "Wellington Cable Car",
+  "Cuba Street",
+  "Wellington Waterfront",
+  "Zealandia",
+  "Weta Workshop",
+  "Oriental Bay"
+],
+
+"Christchurch": [
+  "Christchurch Botanic Gardens",
+  "Canterbury Museum",
+  "Avon River",
+  "New Regent Street",
+  "Christchurch Gondola",
+  "Hagley Park",
+  "International Antarctic Centre",
+  "Sumner Beach"
+],
+
+"Milford Sound": [
+  "Mitre Peak",
+  "Milford Sound Cruise",
+  "Stirling Falls",
+  "Bowen Falls",
+  "Milford Track",
+  "The Chasm",
+  "Harrison Cove",
+  "Underwater Observatory"
+],
+"Kuala Lumpur": [
+  "Petronas Twin Towers",
+  "KL Tower",
+  "Batu Caves",
+  "Bukit Bintang",
+  "Merdeka Square",
+  "Central Market",
+  "Jalan Alor Night Market",
+  "Thean Hou Temple"
+],
+
+"Langkawi": [
+  "Langkawi Sky Bridge",
+  "Langkawi Cable Car",
+  "Pantai Cenang",
+  "Tanjung Rhu Beach",
+  "Kilim Geoforest Park",
+  "Eagle Square",
+  "Seven Wells Waterfall",
+  "Pulau Payar Marine Park"
+],
+
+"Penang": [
+  "George Town UNESCO Heritage Site",
+  "Penang Hill",
+  "Kek Lok Si Temple",
+  "Chew Jetty",
+  "Armenian Street",
+  "Clan Jetties",
+  "Penang Street Art",
+  "Gurney Drive"
+],
+
+"Cameron Highlands": [
+  "BOH Tea Plantation",
+  "Mossy Forest",
+  "Cameron Lavender Garden",
+  "Strawberry Farm",
+  "Gunung Brinchang",
+  "Time Tunnel Museum",
+  "Butterfly Garden",
+  "Tea Valley Viewpoint"
+],
+
+"Kota Kinabalu": [
+  "Mount Kinabalu",
+  "Tunku Abdul Rahman Marine Park",
+  "Manukan Island",
+  "Signal Hill Observatory",
+  "Kota Kinabalu Waterfront",
+  "Mari Mari Cultural Village",
+  "Sabah State Mosque",
+  "Gaya Street Market"
+],
+
+"Malacca": [
+  "Jonker Street",
+  "A Famosa",
+  "St. Paul's Hill",
+  "Dutch Square",
+  "Christ Church Melaka",
+  "Melaka River Cruise",
+  "Baba & Nyonya Heritage Museum",
+  "The Shore Sky Tower"
+],
+"Manila": [
+  "Intramuros",
+  "Fort Santiago",
+  "Rizal Park",
+  "Manila Cathedral",
+  "San Agustin Church",
+  "Binondo Chinatown",
+  "National Museum of Fine Arts",
+  "Manila Bay Walk"
+],
+
+"Boracay": [
+  "White Beach",
+  "Puka Shell Beach",
+  "Willy's Rock",
+  "Mount Luho Viewpoint",
+  "Bulabog Beach",
+  "Diniwid Beach",
+  "Crystal Cove Island",
+  "Magic Island Cliff Diving"
+],
+
+"Palawan": [
+  "Big Lagoon",
+  "Small Lagoon",
+  "Secret Lagoon",
+  "Nacpan Beach",
+  "Puerto Princesa Underground River",
+  "Kayangan Lake",
+  "Twin Lagoon",
+  "Seven Commandos Beach"
+],
+
+"Cebu": [
+  "Magellan's Cross",
+  "Basilica del Santo Niño",
+  "Temple of Leah",
+  "Tops Lookout",
+  "Kawasan Falls",
+  "Oslob Whale Shark Watching",
+  "Moalboal Sardine Run",
+  "Sirao Flower Garden"
+],
+
+"Bohol": [
+  "Chocolate Hills",
+  "Philippine Tarsier Sanctuary",
+  "Loboc River Cruise",
+  "Baclayon Church",
+  "Hinagdanan Cave",
+  "Alona Beach",
+  "Blood Compact Shrine",
+  "Panglao Island"
+],
+
+"Siargao": [
+  "Cloud 9 Boardwalk",
+  "Sugba Lagoon",
+  "Magpupungko Rock Pools",
+  "Naked Island",
+  "Daku Island",
+  "Guyam Island",
+  "Coconut View Deck",
+  "Pacifico Beach"
+],
+"Buenos Aires": [
+  "Plaza de Mayo",
+  "Casa Rosada",
+  "La Boca",
+  "Caminito",
+  "Recoleta Cemetery",
+  "Teatro Colón",
+  "Puerto Madero",
+  "San Telmo Market"
+],
+
+"Bariloche": [
+  "Cerro Campanario",
+  "Circuito Chico",
+  "Nahuel Huapi Lake",
+  "Cerro Catedral",
+  "Colonia Suiza",
+  "Llao Llao Hotel",
+  "Victoria Island",
+  "Puerto Pañuelo"
+],
+
+"Mendoza": [
+  "Parque General San Martín",
+  "Plaza Independencia",
+  "Bodega Catena Zapata",
+  "Bodega Salentein",
+  "Aconcagua Provincial Park",
+  "Puente del Inca",
+  "Uco Valley",
+  "Cacheuta Hot Springs"
+],
+
+"El Calafate": [
+  "Perito Moreno Glacier",
+  "Los Glaciares National Park",
+  "Laguna Nimez Reserve",
+  "Glaciarium",
+  "Argentino Lake",
+  "Upsala Glacier Cruise",
+  "Patagonian Ice Fields",
+  "Bahía Redonda"
+]
 };
 
 // Expose landmark data and resolve casual user input like "Bengaluru heritage places" to the real city key.
@@ -9490,6 +10059,15 @@ const _languageMap = {
   'Krabi & Railay': { lang:'Thai', flag:'🇹🇭', script:'Thai' },
   'Koh Samui': { lang:'Thai', flag:'🇹🇭', script:'Thai' },
   'Ayutthaya': { lang:'Thai', flag:'🇹🇭', script:'Thai' },
+  // Turkey
+'Turkey': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Istanbul': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Antalya': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Cappadocia': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Ankara': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Izmir': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Bodrum': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Pamukkale': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
   // Japan
   'Japan': { lang:'Japanese', flag:'🇯🇵', script:'Hiragana' },
   'Tokyo': { lang:'Japanese', flag:'🇯🇵', script:'Hiragana' },
@@ -9521,9 +10099,7 @@ const _languageMap = {
   'Athens':    { lang:'Greek', flag:'🇬🇷', script:'Greek' },
   'Santorini': { lang:'Greek', flag:'🇬🇷', script:'Greek' },
   'Mykonos':   { lang:'Greek', flag:'🇬🇷', script:'Greek' },
-  // Turkey
-  'Istanbul':  { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
-  'Cappadocia': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+
   // Morocco
   'Morocco':   { lang:'Moroccan Arabic', flag:'🇲🇦', script:'Arabic' },
   'Marrakech': { lang:'Moroccan Arabic', flag:'🇲🇦', script:'Arabic' },
@@ -9547,6 +10123,68 @@ const _languageMap = {
   'Zhangjiajie National Forest Park': { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
   'Guilin':    { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
   'Chengdu':   { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
+  // Germany
+'Germany': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Berlin': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Munich': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Hamburg': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Cologne': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Frankfurt': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Heidelberg': { lang:'German', flag:'🇩🇪', script:'Latin' },
+
+// Switzerland
+'Switzerland': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Zurich': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Lucerne': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Interlaken': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Grindelwald': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Zermatt': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Geneva': { lang:'French', flag:'🇨🇭', script:'Latin' },
+
+// Argentina
+'Argentina': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Buenos Aires': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Bariloche': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Mendoza': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'El Calafate': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Ushuaia': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Puerto Iguazú': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+
+// Philippines
+'Philippines': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Manila': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Boracay': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Palawan': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Cebu': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Bohol': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Siargao': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+
+// Malaysia
+'Malaysia': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Kuala Lumpur': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Langkawi': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Penang': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Cameron Highlands': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Kota Kinabalu': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Malacca': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+
+// New Zealand
+'New Zealand': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Auckland': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Queenstown': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Rotorua': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Wellington': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Christchurch': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Wanaka': { lang:'English', flag:'🇳🇿', script:'Latin' },
+
+// South Africa
+'South Africa': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Cape Town': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Johannesburg': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Durban': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Kruger National Park': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Stellenbosch': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Garden Route': { lang:'English', flag:'🇿🇦', script:'Latin' },
   // Singapore
   'Singapore': { lang:'English/Mandarin/Malay', flag:'🇸🇬', script:'Latin' },
   'Marina Bay Sands': { lang:'English', flag:'🇸🇬', script:'Latin' },
@@ -9572,6 +10210,15 @@ const _languageMap = {
   'Desert Safari Dubai': { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
   'Sharjah':        { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
   'Fujairah':       { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
+  // Egypt
+'Egypt': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Cairo': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Giza': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Luxor': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Aswan': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Alexandria': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Sharm El Sheikh': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Hurghada': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
   // Default
   '_default': { lang:'Local Language', flag:'🌍', script:'Latin' },
 };
@@ -9584,6 +10231,29 @@ const _phraseDB = {
     { type:'Bargaining', local:'もう少し安くできますか？', roman:'Mō sukoshi yasuku dekimasu ka?', meaning:'Can you make it a bit cheaper?' },
     { type:'Thank You', local:'ありがとうございます', roman:'Arigatō gozaimasu', meaning:'Thank you very much' },
   ],
+  'German': [
+  { type:'Greeting', local:'Hallo / Guten Tag', roman:'—', meaning:'Hello / Good day' },
+  { type:'Ordering', local:'Ich möchte ___, bitte', roman:'—', meaning:'I would like ___, please' },
+  { type:'Directions', local:'Wo ist ___?', roman:'—', meaning:'Where is ___?' },
+  { type:'Bargaining', local:'Können Sie den Preis senken?', roman:'—', meaning:'Can you lower the price?' },
+  { type:'Thank You', local:'Vielen Dank', roman:'—', meaning:'Thank you very much' },
+],
+
+'Malay': [
+  { type:'Greeting', local:'Selamat pagi', roman:'—', meaning:'Good morning' },
+  { type:'Ordering', local:'Saya mahu ___', roman:'—', meaning:'I would like ___' },
+  { type:'Directions', local:'Di mana ___?', roman:'—', meaning:'Where is ___?' },
+  { type:'Bargaining', local:'Boleh kurang harga?', roman:'—', meaning:'Can you lower the price?' },
+  { type:'Thank You', local:'Terima kasih', roman:'—', meaning:'Thank you' },
+],
+
+'Filipino': [
+  { type:'Greeting', local:'Kumusta', roman:'—', meaning:'Hello' },
+  { type:'Ordering', local:'Gusto ko ng ___', roman:'—', meaning:'I would like ___' },
+  { type:'Directions', local:'Nasaan ang ___?', roman:'—', meaning:'Where is ___?' },
+  { type:'Bargaining', local:'Pwede bang mas mura?', roman:'—', meaning:'Can it be cheaper?' },
+  { type:'Thank You', local:'Salamat', roman:'—', meaning:'Thank you' },
+],
   'Thai': [
     { type:'Greeting',  local:'สวัสดีครับ/ค่ะ', roman:'Sawasdee krab / ka', meaning:'Hello (krab = male, ka = female)' },
     { type:'Ordering',  local:'ขอ___หน่อยได้ไหม', roman:'Kho ___ noi dai mai', meaning:'Can I have ___ please?' },
@@ -9819,6 +10489,11 @@ const _langBCP47 = {
   'English':                 ['en-GB','en-US','en'],
   'Tagalog':                 ['fil-PH','tl-PH','en-PH'],
   'Swahili':                 ['sw-KE','sw'],
+  'Malay': ['ms-MY','ms'],
+'Filipino': ['fil-PH','tl-PH','en-PH'],
+'Maori': ['mi-NZ','mi','en-NZ'],
+'Zulu': ['zu-ZA','zu','en-ZA'],
+'Arabic': ['ar-AE','ar-SA','ar-EG','ar']
 };
 
 // Wait for voices to load, then resolve best voice for a BCP-47 tag list
@@ -10892,13 +11567,7 @@ window.submitProofToAI = submitProofToAI;
       <p class="vs-sub">Upload a photo of any place — a temple, beach, cityscape, or mountain — and let AI discover matching destinations around the world.</p>
     </div>
 
-    <div class="vs-key-box">
-      <div class="vs-key-icon">✨</div>
-      <div class="vs-key-body">
-        <div class="vs-key-label">Powered by Claude AI</div>
-        <div class="vs-key-hint">No API key needed — AI runs securely on the server. Just upload a photo and go.</div>
-      </div>
-    </div>
+    
 
     <div class="vs-upload-area">
       <div class="vs-drop-zone" id="vsDropZone">
@@ -11040,7 +11709,7 @@ window.submitProofToAI = submitProofToAI;
 
     var prompt = 'You are an expert travel guide with encyclopaedic knowledge of world destinations.\n\nAnalyse this travel photo and respond with ONLY a JSON object (no markdown, no extra text) in this exact format:\n{\n  "identified": {\n    "name": "Name of the place or landmark (e.g. Santorini, Greece or Angkor Wat, Cambodia)",\n    "emoji": "single relevant emoji",\n    "description": "2-3 sentence description of what makes this place special"\n  },\n  "similar": [\n    {\n      "name": "Place Name",\n      "country": "Country Name",\n      "flag": "flag emoji",\n      "why": "One concise sentence explaining the visual or cultural similarity",\n      "match": "85%",\n      "tag": "Beach",\n      "tagColor": "#00d4b8"\n    }\n  ]\n}\n\nChoose tag from: Beach, Mountain, City, Temple, Heritage, Nature, Island, Village, Desert, Forest.\nReturn exactly 6 similar destinations. Make similarities genuine — consider architecture, landscape, atmosphere, colour palette, and cultural character. Return ONLY the JSON, nothing else.';
 
-    var apiBase = 'http://localhost:5001';
+    var apiBase =  "http://127.0.0.1:5001";
 
     try {
       var resp = await fetch(apiBase + '/api/visual-search', {
