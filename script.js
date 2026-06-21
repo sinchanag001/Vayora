@@ -1,0 +1,8774 @@
+(function(){
+      const synth = window.speechSynthesis;
+      if (!synth) return;
+      let currentLang = 'th-TH';
+      let voicesCache = [];
+      function loadVoices(){ voicesCache = synth.getVoices() || []; }
+      loadVoices();
+      if (typeof speechSynthesis !== 'undefined') speechSynthesis.onvoiceschanged = loadVoices;
+
+      function pickVoice(lang){
+        if (!voicesCache.length) loadVoices();
+        const exact = voicesCache.find(v => v.lang && v.lang.toLowerCase() === lang.toLowerCase());
+        if (exact) return exact;
+        const base = lang.split('-')[0].toLowerCase();
+        return voicesCache.find(v => v.lang && v.lang.toLowerCase().startsWith(base)) || null;
+      }
+
+      // Translations of fixed phrases. Day titles / activity names stay in their original language (often English from AI).
+      const T = {
+        'th-TH': { intro: 'นี่คือแผนการเดินทางของคุณ', day: 'วันที่', at: 'เวลา', noVoice: 'ไม่พบเสียงภาษาไทยในเบราว์เซอร์นี้ กำลังใช้เสียงสำรอง' },
+        'zh-CN': { intro: '这是您的行程安排', day: '第', at: '时间', daySuffix:'天', noVoice: '此浏览器中未找到中文语音，正在使用备用语音' },
+        'ko-KR': { intro: '여행 일정입니다', day: '일차', at: '시간', noVoice: '이 브라우저에서 한국어 음성을 찾을 수 없습니다' },
+        'ja-JP': { intro: 'これはあなたの旅程です', day: '日目', at: '時間', noVoice: 'このブラウザで日本語の音声が見つかりません' },
+        'es-MX': { intro: 'Este es tu itinerario', day: 'Día', at: 'a las', noVoice: 'No se encontró voz en español en este navegador' },
+      };
+
+      function buildScript(lang){
+        const t = T[lang];
+        const dayEls = document.querySelectorAll('#p4days .p4-day');
+        const lines = [];
+        lines.push(t.intro + '.');
+        dayEls.forEach(el => {
+          const numEl = el.querySelector('.p4-day-num');
+          const titleEl = el.querySelector('.p4-day-title');
+          const num = (numEl?.textContent || '').replace(/\D/g,'');
+          if (lang === 'zh-CN') lines.push(`${t.day}${num}${t.daySuffix}: ${titleEl?.textContent || ''}.`);
+          else if (lang === 'ja-JP' || lang === 'ko-KR') lines.push(`${num} ${t.day}: ${titleEl?.textContent || ''}.`);
+          else lines.push(`${t.day} ${num}: ${titleEl?.textContent || ''}.`);
+          el.querySelectorAll('.p4-activity').forEach(act => {
+            const time = act.querySelector('.p4-act-time')?.textContent?.trim() || '';
+            const name = act.querySelector('.p4-act-name')?.textContent?.trim() || '';
+            const desc = act.querySelector('.p4-act-desc')?.textContent?.trim() || '';
+            if (!name) return;
+            const timePart = time ? `${t.at} ${time}, ` : '';
+            lines.push(`${timePart}${name}. ${desc}`);
+          });
+        });
+        return lines.filter(Boolean);
+      }
+
+      function speakLines(lines, lang){
+        synth.cancel();
+        const voice = pickVoice(lang);
+        const status = document.getElementById('pvStatus');
+        if (!voice) {
+          status.textContent = (T[lang]?.noVoice || 'Voice not available') + '.';
+        }
+        let i = 0;
+        function next(){
+          if (i >= lines.length) { status.textContent = '✓ Finished.'; return; }
+          const u = new SpeechSynthesisUtterance(lines[i]);
+          u.lang = lang;
+          if (voice) u.voice = voice;
+          u.rate = 0.95; u.pitch = 1;
+          u.onend = () => { i++; next(); };
+          u.onerror = () => { i++; next(); };
+          status.textContent = `Speaking ${i+1} / ${lines.length}…`;
+          synth.speak(u);
+        }
+        next();
+      }
+
+      document.addEventListener('click', (e) => {
+        const langBtn = e.target.closest('#p4voice .pv-lang');
+        if (langBtn) {
+          currentLang = langBtn.dataset.lang;
+          document.querySelectorAll('#p4voice .pv-lang').forEach(b => b.classList.remove('active'));
+          langBtn.classList.add('active');
+          document.getElementById('pvStatus').textContent = `Selected ${langBtn.textContent.trim()}. Press Play.`;
+          return;
+        }
+        if (e.target.id === 'pvPlay') {
+          // Make sure all days are expanded so text is in the DOM (they already are; we read regardless of open state).
+          const lines = buildScript(currentLang);
+          if (!lines.length) { document.getElementById('pvStatus').textContent = 'No itinerary to read yet.'; return; }
+          speakLines(lines, currentLang);
+        }
+        if (e.target.id === 'pvStop') {
+          synth.cancel();
+          document.getElementById('pvStatus').textContent = 'Stopped.';
+        }
+      });
+
+      // ===== Inline per-activity speaker buttons =====
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.pv-inline-btn');
+        if (!btn) return;
+        const wrap = btn.closest('.pv-inline');
+        const select = wrap?.querySelector('.pv-inline-lang');
+        const lang = select?.value || 'th-TH';
+        const text = wrap?.dataset.text || '';
+        if (!text.trim()) return;
+        synth.cancel();
+        const voice = pickVoice(lang);
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = lang;
+        if (voice) u.voice = voice;
+        u.rate = 0.95;
+        btn.textContent = '⏸';
+        u.onend = u.onerror = () => { btn.textContent = '🔊'; };
+        synth.speak(u);
+      });
+
+      // Top panel disabled — voice controls are now inline next to each activity.
+      window.__showVoicePlayer = function(){};
+    })();
+    
+
+
+// ======= ITINERARY ENGINE =======
+// userPrefs populated by pickVibe (defined later, after vibeNames/vibeEmojis)
+const userPrefs = {
+  country: null, budget: null, budgetFormatted: null,
+  days: null, who: null, vibe: null,
+};
+window.userPrefs = userPrefs;
+
+// Wire the success close button — go directly into the copied pick-place flow
+document.getElementById('successCloseBtn').addEventListener('click', () => {
+  document.getElementById('successOverlay').style.display = 'none';
+  document.getElementById('dot5').style.display = '';
+  goTo(5);
+  renderPickCity();
+});
+
+// ====================================================================
+//   AI ALGORITHM — mirrors globe-quest-go.lovable.app
+//   Reference site uses two Supabase edge functions:
+//     1. suggest-cities    → AI returns [{name,safety,note}] for a country
+//     2. generate-itinerary → AI returns full structured day-by-day plan
+//   We replicate that exact flow here, calling an LLM directly from the
+//   browser. The user supplies their own OpenAI API key on first use
+//   (stored in localStorage). On any failure we silently fall back to
+//   the offline algorithm so the UI never breaks.
+// ====================================================================
+window.gqgAI = (function(){
+  const KEY_LS = 'gqg_openai_key';
+  function getKey(promptIfMissing){
+    let k = localStorage.getItem(KEY_LS);
+    if (!k && promptIfMissing) {
+      k = window.prompt(
+        'To use real AI recommendations (same as globe-quest-go.lovable.app), paste your OpenAI API key.\n\n' +
+        'It is stored only in your browser (localStorage) and sent directly to OpenAI.\n' +
+        'Leave blank to use the offline algorithm.',
+        ''
+      );
+      if (k && k.trim().startsWith('sk-')) {
+        localStorage.setItem(KEY_LS, k.trim());
+        k = k.trim();
+      } else {
+        k = null;
+      }
+    }
+    return k;
+  }
+  async function chatJSON(systemMsg, userMsg, opts){
+    const key = getKey(true);
+    if (!key) throw new Error('NO_KEY');
+    const body = {
+      model: (opts && opts.model) || 'gpt-4o-mini',
+      response_format: { type: 'json_object' },
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: systemMsg },
+        { role: 'user', content: userMsg }
+      ]
+    };
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + key
+      },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) {
+      if (r.status === 401) localStorage.removeItem(KEY_LS);
+      const t = await r.text();
+      throw new Error('AI ' + r.status + ': ' + t.slice(0,200));
+    }
+    const data = await r.json();
+    const txt = data.choices?.[0]?.message?.content || '{}';
+    return JSON.parse(txt);
+  }
+
+  // Mirrors the reference site's `suggest-cities` edge function.
+  // Input: country name. Output: cities sorted by safety descending.
+  async function suggestCities(country){
+    const sys = 'You are a travel safety analyst. Return ONLY valid JSON. No markdown, no preamble.';
+    const user = `For travelers visiting ${country}, list 8 of the most popular, real cities or regions tourists actually go to.
+For each, give an AI-rated safety score from 1.0 to 10.0 based on public travel-safety indices (crime, health, infrastructure, tourist-friendliness), plus a one-sentence note explaining the vibe and any caveat.
+
+Return ONLY this JSON shape:
+{
+  "cities": [
+    {"name":"City Name","safety":8.7,"note":"One short sentence describing vibe + safety caveat."}
+  ]
+}
+Sort the array by safety descending. Use real city names that exist in ${country}.`;
+    const out = await chatJSON(sys, user);
+    const list = (out.cities || []).filter(c => c && c.name && typeof c.safety === 'number');
+    list.sort((a,b) => b.safety - a.safety);
+    return list;
+  }
+
+  // Mirrors the reference site's `generate-itinerary` edge function.
+  // Input: full quiz state. Output: structured day-by-day plan with REAL place names.
+  async function generateItineraryAI(prefs, focusCity){
+    const sys = 'You are an expert travel planner. Return ONLY valid JSON, no markdown. Every place name must be a real, googleable proper noun (specific landmark, restaurant, neighborhood, market, museum, temple, beach, trail).';
+    const focus = focusCity ? `${focusCity}, ${prefs.country}` : prefs.country;
+    const user = `Generate a detailed ${prefs.days}-day travel itinerary for ${focus}.
+Traveler profile: ${prefs.who || 'solo'} · ${prefs.vibe || 'chill'} vibe · budget around ${prefs.budgetFormatted || prefs.budget}.
+
+Every "place" MUST be a real, currently-existing, googleable place in or within day-trip distance of ${focusCity || prefs.country}. Do NOT invent fictional places. Do NOT use generic labels like "Local breakfast", "City walk", "Sunset viewpoint" — always name THE actual place (e.g. "Shanti Stupa", "Trastevere", "Tsukiji Outer Market", "Da Enzo al 29", "Sensō-ji Temple", "Park Güell").
+
+Every "place" MUST be a real, currently-existing, googleable place in ${prefs.country}.
+Return ONLY this JSON shape:
+{
+  "summary": "One evocative sentence about why this trip is perfect.",
+  "totalCostEstimate": "$1,200 - $1,800",
+  "bestTimeToVisit": "April–May for cherry blossoms",
+  "packingTips": ["6 short concrete items"],
+  "destination_highlight": "One sentence about why ${prefs.country} suits this vibe",
+  "weather_tip": "One sentence based on current season in ${prefs.country}",
+  "tips": [
+    {"icon":"💰","label":"Money","text":"actionable tip max 18 words"},
+    {"icon":"🚇","label":"Transport","text":"..."},
+    {"icon":"🍜","label":"Food","text":"..."},
+    {"icon":"🏛️","label":"Culture","text":"..."},
+    {"icon":"🛡️","label":"Safety","text":"..."}
+  ],
+  "days": [
+    {
+      "day": 1,
+      "title": "Evocative day title",
+      "dailyCost": "$120",
+      "weather": {"icon":"☀️","label":"Sunny 24°C"},
+      "activities": [
+        {"time":"Morning","name":"REAL NAMED PLACE","desc":"15-20 words on what to do AT that place","tag":"Landmark|Food|Culture|Adventure|Relax|Shopping|Nightlife"},
+        {"time":"Afternoon","name":"REAL NAMED PLACE","desc":"...","tag":"..."},
+        {"time":"Evening","name":"REAL NAMED PLACE","desc":"...","tag":"..."}
+      ],
+      "food": ["2 named restaurants/dishes"],
+      "tip": "One insider tip for day 1"
+    }
+  ]
+}
+
+Generate exactly ${prefs.days} days. Match the ${prefs.vibe} vibe, fit within ${prefs.budgetFormatted || prefs.budget} budget. Each day MUST have Morning, Afternoon, Evening — all with real proper-noun place names.`;
+    return await chatJSON(sys, user, { model: 'gpt-4o-mini' });
+  }
+
+  function clearKey(){ localStorage.removeItem(KEY_LS); }
+  function hasKey(){ return !!localStorage.getItem(KEY_LS); }
+  return { suggestCities, generateItineraryAI, clearKey, hasKey, getKey };
+})();
+
+// ---- OPEN WEATHER MAP fetch (no key needed — wttr.in) ----
+async function fetchWeather(city) {
+  try {
+    const url = `https://wttr.in/${encodeURIComponent(city)}?format=j1`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const cur = data.current_condition[0];
+
+    return {
+      temp: cur.temp_C + '°C',
+      feels: cur.FeelsLikeC + '°C',
+      desc: cur.weatherDesc[0].value,
+      humidity: cur.humidity + '%',
+      wind: cur.windspeedKmph + ' km/h',
+      icon: weatherIcon(cur.weatherCode),
+    };
+  } catch(e) {
+    return null;
+  }
+}
+
+function weatherIcon(code) {
+  const c = parseInt(code);
+  if (c === 113) return '☀️';
+  if ([116,119,122].includes(c)) return '⛅';
+  if ([143,248,260].includes(c)) return '🌫️';
+  if ([176,263,266,293,296].includes(c)) return '🌦️';
+  if ([299,302,305,308].includes(c)) return '🌧️';
+  if ([200,386,389,392,395].includes(c)) return '⛈️';
+  if ([179,182,185,227,230,281,284,323,326,329,332,335,338,350,362,365,368,371,374,377].includes(c)) return '❄️';
+  return '🌡️';
+}
+
+// ---- Step tracker UI ----
+let stepEls = [];
+function initSteps(steps) {
+  const container = document.getElementById('p4loadingSteps');
+  container.innerHTML = '';
+  stepEls = steps.map(label => {
+    const el = document.createElement('div');
+    el.className = 'p4-step';
+    el.innerHTML = `<div class="p4-step-dot"></div><span>${label}</span>`;
+    container.appendChild(el);
+    return el;
+  });
+}
+function setStep(i, state) {
+  if (!stepEls[i]) return;
+  stepEls[i].classList.remove('done','active');
+  if (state === 'done') stepEls[i].classList.add('done');
+  if (state === 'active') stepEls[i].classList.add('active');
+}
+
+// ---- Main itinerary generator ----
+async function generateItinerary() {
+  // Reset UI
+  document.getElementById('p4loading').style.display = 'flex';
+  document.getElementById('p4weather').style.display = 'none';
+  document.getElementById('p4tips').style.display = 'none';
+  document.getElementById('p4days').style.display = 'none';
+  document.getElementById('p4error').style.display = 'none';
+
+  const { country, budgetFormatted, days, who, vibe } = userPrefs;
+
+  // Update header
+  document.getElementById('p4title').textContent = `${days}-Day ${country} Itinerary`;
+  document.getElementById('p4badges').innerHTML = `
+    <span style="padding:0.3rem 0.7rem;border-radius:20px;border:1px solid rgba(0,212,184,0.35);color:#00d4b8;font-size:0.7rem;font-weight:700;">${vibeEmojis[vibe]||'🌍'} ${vibeNames[vibe]||vibe}</span>
+    <span style="padding:0.3rem 0.7rem;border-radius:20px;border:1px solid rgba(240,192,64,0.35);color:#f0c040;font-size:0.7rem;font-weight:700;">${budgetFormatted}</span>
+    <span style="padding:0.3rem 0.7rem;border-radius:20px;border:1px solid rgba(139,92,246,0.35);color:#a78bfa;font-size:0.7rem;font-weight:700;">${days} days</span>
+  `;
+
+  initSteps([
+    '🌤 Fetching live weather',
+    '🧠 Building day-by-day plan',
+    '💡 Generating insider tips',
+    '✅ Finalising itinerary'
+  ]);
+  setStep(0, 'active');
+
+  // 1. Weather
+  const weather = await fetchWeather(country);
+  setStep(0, 'done');
+  setStep(1, 'active');
+
+  // Render weather immediately
+  renderWeather(weather, country);
+
+  // 2. Call Claude API for itinerary
+  const _focusCity = (window._gqgSelectedCity && window._gqgSelectedCity.name) || '';
+  const _focusStr = _focusCity ? `${_focusCity}, ${country}` : country;
+  const prompt = `You are an expert travel planner. Generate a detailed ${days}-day travel itinerary for ${_focusStr} for a ${who} traveller with a ${vibe} vibe and a budget of ${budgetFormatted}.
+
+The traveller has chosen ${_focusStr} specifically — every activity name MUST be a real, currently-existing, googleable place in or within day-trip distance of ${_focusCity || country}. Do not invent fictional places.
+
+Return ONLY valid JSON in this exact structure, no markdown, no extra text:
+{
+  "destination_highlight": "One evocative sentence about why ${country} is perfect for this trip",
+  "tips": [
+    {"icon": "emoji", "label": "short category", "text": "actionable tip (max 18 words)"},
+    {"icon": "emoji", "label": "short category", "text": "actionable tip"},
+    {"icon": "emoji", "label": "short category", "text": "actionable tip"},
+    {"icon": "emoji", "label": "short category", "text": "actionable tip"},
+    {"icon": "emoji", "label": "short category", "text": "actionable tip"}
+  ],
+  "weather_tip": "One sentence travel tip based on the current weather/season in ${country}",
+  "days": [
+    {
+      "day": 1,
+      "title": "Evocative day title",
+      "color": "#hex accent color matching vibe",
+      "activities": [
+        {"time": "Morning", "name": "SPECIFIC NAMED PLACE — e.g. 'Shanti Stupa', 'Leh Palace', 'Trastevere neighborhood', 'Tsukiji Outer Market'", "desc": "Description 15-20 words mentioning what to do AT that place", "tag": "Landmark|Food|Culture|Adventure|Relax|Shopping|Nightlife"},
+        {"time": "Afternoon", "name": "SPECIFIC NAMED PLACE (real landmark, restaurant, market, neighborhood, museum, beach, trail, temple, etc.)", "desc": "Description 15-20 words", "tag": "..."},
+        {"time": "Evening", "name": "SPECIFIC NAMED PLACE (real proper noun)", "desc": "Description 15-20 words", "tag": "..."}
+      ]
+    }
+  ]
+}
+
+Generate exactly ${days} days. Make it specific to ${country}, match the ${vibe} vibe, fit within ${budgetFormatted} budget, and be genuinely useful — real place names, honest tips, practical timing.
+
+CRITICAL RULE FOR ACTIVITY NAMES:
+- Every activity "name" MUST be a real, specific, named place (a proper noun) — e.g. "Shanti Stupa", "Leh Palace", "Pantheon", "Trastevere", "Sensō-ji Temple", "Borough Market", "Tsukiji Outer Market", "Park Güell".
+- Do NOT use generic labels like "Local breakfast", "City walk", "Sunset viewpoint", "Traditional dinner", "Explore old town", "Cultural experience". Always name THE actual place.
+- If the activity is food, name the restaurant/market/street (e.g. "Da Enzo al 29", "Khan el-Khalili Bazaar"). If it is a walk, name the neighborhood or street. If it is a viewpoint, name the hill/tower/stupa.
+- The "desc" field then explains what to DO at that named place.
+
+Tips should cover Money/Budget, Getting Around, Food, Culture/Etiquette, Safety. Each day must have Morning, Afternoon, and Evening activities.`;
+
+  let itineraryData = null;
+  try {
+    const response = await fetch('/api/generate-itinerary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ country, days, who, vibe, budgetFormatted, focusCity: _focusCity })
+    });
+    if (!response.ok) {
+      const errData = await response.json().catch(function() { return {}; });
+      throw new Error(errData.error ? errData.error.message : 'Server error ' + response.status);
+    }
+    itineraryData = await response.json();
+    setStep(1, 'done');
+    setStep(2, 'active');
+    await new Promise(r => setTimeout(r, 400));
+    setStep(2, 'done');
+    setStep(3, 'active');
+    await new Promise(r => setTimeout(r, 300));
+    setStep(3, 'done');
+    await new Promise(r => setTimeout(r, 300));
+  } catch(err) {
+    console.warn('AI itinerary unavailable; using the local real-place itinerary engine instead.', err);
+    if (typeof buildNamedItineraryData === 'function') {
+      itineraryData = buildNamedItineraryData({ country, days, who, vibe, budgetFormatted, focusCity: _focusCity });
+      setStep(1, 'done');
+      setStep(2, 'done');
+      setStep(3, 'done');
+    } else {
+      document.getElementById('p4loading').style.display = 'none';
+      document.getElementById('p4error').style.display = 'block';
+      document.getElementById('p4errorMsg').textContent = err.message || 'Unknown error. Please try again.';
+      return;
+    }
+  }
+
+  if (typeof enforceNamedPlaces === 'function') {
+    itineraryData = enforceNamedPlaces(itineraryData, { country, days, who, vibe, budgetFormatted, focusCity: _focusCity });
+  }
+
+  // Render everything
+  renderTips(itineraryData, weather);
+  renderDays(itineraryData);
+  document.getElementById('p4loading').style.display = 'none';
+  document.getElementById('p4weather').style.display = 'block';
+  document.getElementById('p4tips').style.display = 'block';
+  document.getElementById('p4days').style.display = 'block';
+  if (typeof window.__showVoicePlayer === 'function') window.__showVoicePlayer();
+}
+
+function renderWeather(w, city) {
+  document.getElementById('p4weatherCity').textContent = city;
+  if (!w) {
+    document.getElementById('p4weatherDesc').textContent = 'Weather data unavailable';
+    document.getElementById('p4weatherIcon').textContent = '🌡️';
+    document.getElementById('p4weatherTemp').textContent = '—';
+    document.getElementById('p4weatherHumid').textContent = '—';
+    document.getElementById('p4weatherWind').textContent = '—';
+    return;
+  }
+  document.getElementById('p4weatherIcon').textContent = w.icon;
+  document.getElementById('p4weatherDesc').textContent = w.desc;
+  document.getElementById('p4weatherTemp').textContent = w.temp;
+  document.getElementById('p4weatherHumid').textContent = w.humidity;
+  document.getElementById('p4weatherWind').textContent = w.wind;
+}
+
+function renderTips(data, weather) {
+  const container = document.getElementById('p4tipsInner');
+  const tips = [...(data.tips || [])];
+
+  // Inject weather tip at front if present
+  if (data.weather_tip) {
+    tips.unshift({ icon: '🌤', label: 'Weather', text: data.weather_tip });
+  }
+
+  container.innerHTML = tips.map(t => `
+    <div class="p4-tip-pill">
+      <div class="p4-tip-icon">${t.icon || '💡'}</div>
+      <div class="p4-tip-label">${t.label || 'Tip'}</div>
+      <div class="p4-tip-text">${t.text || ''}</div>
+    </div>
+  `).join('');
+
+  // Destination highlight — injected just above #p4days
+  if (data.destination_highlight) {
+    const existing = document.getElementById('p4highlight');
+    if (existing) existing.remove();
+    const hl = document.createElement('div');
+    hl.id = 'p4highlight';
+    hl.style.cssText = 'max-width:900px;margin:1.25rem auto 0;padding:0 1rem;';
+    hl.innerHTML = `
+      <div style="padding:1.1rem 1.4rem;background:linear-gradient(135deg,rgba(139,92,246,0.1),rgba(0,212,184,0.06));border:1px solid rgba(139,92,246,0.25);border-radius:16px;display:flex;align-items:flex-start;gap:0.75rem;">
+        <span style="font-size:1.4rem;flex-shrink:0;margin-top:2px;">${vibeEmojis[userPrefs.vibe]||'🌍'}</span>
+        <div>
+          <div style="font-size:0.62rem;letter-spacing:0.18em;text-transform:uppercase;color:#a78bfa;font-weight:700;margin-bottom:0.3rem;">Why This Trip?</div>
+          <p style="font-style:italic;font-family:'Playfair Display',serif;font-size:0.95rem;color:rgba(255,255,255,0.8);line-height:1.65;margin:0;">${data.destination_highlight}</p>
+        </div>
+      </div>`;
+    document.getElementById('p4days').insertAdjacentElement('beforebegin', hl);
+  }
+}
+
+const tagColors = {
+  Landmark:  { bg: 'rgba(240,192,64,0.15)',  color: '#f0c040' },
+  Food:      { bg: 'rgba(255,107,107,0.15)', color: '#ff6b6b' },
+  Culture:   { bg: 'rgba(139,92,246,0.15)',  color: '#a78bfa' },
+  Adventure: { bg: 'rgba(234,88,12,0.15)',   color: '#fb923c' },
+  Relax:     { bg: 'rgba(0,212,184,0.15)',   color: '#00d4b8' },
+  Shopping:  { bg: 'rgba(236,72,153,0.15)',  color: '#f472b6' },
+  Nightlife: { bg: 'rgba(99,102,241,0.15)',  color: '#818cf8' },
+};
+
+function renderDays(data) {
+  const container = document.getElementById('p4days');
+  container.innerHTML = '';
+
+  const { country, budgetFormatted, days: numDays, who, vibe } = userPrefs;
+
+  // ── Summary banner ──
+  const summary = document.createElement('div');
+  summary.style.cssText = 'margin-bottom:1.5rem;padding:1.1rem 1.4rem;border-radius:18px;border:1px solid rgba(0,212,184,0.18);background:rgba(0,20,20,0.5);display:flex;flex-wrap:wrap;gap:1rem;align-items:center;justify-content:space-between;';
+  summary.innerHTML = `
+    <div>
+      <div style="font-size:0.62rem;letter-spacing:0.18em;text-transform:uppercase;color:rgba(0,212,184,0.7);margin-bottom:0.3rem;">Your Trip Summary</div>
+      <div style="font-family:'Playfair Display',serif;font-size:1.15rem;font-weight:700;color:white;">${numDays} Days in ${country}</div>
+      <div style="font-size:0.8rem;color:rgba(255,255,255,0.45);margin-top:0.2rem;">${who} · ${vibeNames[vibe]||vibe} Vibe · ${budgetFormatted} budget</div>
+    </div>
+    <button onclick="toggleAllDays()" id="expandAllBtn" style="padding:0.5rem 1.1rem;border-radius:30px;border:1px solid rgba(0,212,184,0.35);background:transparent;color:#00d4b8;font-size:0.78rem;font-weight:700;cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap;transition:all 0.2s;" onmouseover="this.style.background='rgba(0,212,184,0.1)'" onmouseout="this.style.background='transparent'">Expand All ▾</button>
+  `;
+  container.appendChild(summary);
+
+  const dayEls = [];
+  const daysList = data.days || [];
+
+  daysList.forEach((day, idx) => {
+    const col = day.color || '#00d4b8';
+    const el = document.createElement('div');
+    el.className = 'p4-day' + (idx === 0 ? ' open' : '');
+    el.style.animationDelay = (idx * 0.06) + 's';
+
+    const activitiesHTML = (day.activities || []).map((act, aIdx) => {
+      const tc = tagColors[act.tag] || { bg: 'rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.45)' };
+      const speakText = `${act.name || ''}. ${act.desc || ''}`.replace(/"/g,'&quot;').replace(/'/g,"&#39;");
+      return `
+        <div class="p4-activity">
+          <div class="p4-act-time">${act.time || ''}</div>
+          <div class="p4-act-dot" style="background:${col};box-shadow:0 0 8px ${col}55;"></div>
+          <div class="p4-act-info">
+            <div class="p4-act-name">${act.name || ''}</div>
+            <div class="p4-act-desc">${act.desc || ''}</div>
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px;">
+              <span class="p4-act-tag" style="background:${tc.bg};color:${tc.color};">${act.tag || ''}</span>
+              <span class="pv-inline" data-text="${speakText}" style="display:inline-flex;align-items:center;gap:4px;margin-left:auto;">
+                <select class="pv-inline-lang" style="background:rgba(255,255,255,0.06);color:white;border:1px solid rgba(255,255,255,0.15);border-radius:20px;padding:3px 8px;font-size:0.7rem;font-family:'DM Sans',sans-serif;cursor:pointer;outline:none;">
+                  <option value="th-TH">🇹🇭 Thai</option>
+                  <option value="zh-CN">🇨🇳 Chinese</option>
+                  <option value="ko-KR">🇰🇷 Korean</option>
+                  <option value="ja-JP">🇯🇵 Japanese</option>
+                  <option value="es-MX">🇲🇽 Mexican</option>
+                </select>
+                <button class="pv-inline-btn" title="Listen" style="background:linear-gradient(135deg,#00d4b8,#8b5cf6);border:none;color:white;width:28px;height:28px;border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;box-shadow:0 4px 12px rgba(0,212,184,0.35);">🔊</button>
+              </span>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div class="p4-day-header" onclick="toggleDay(this.parentElement)">
+        <div class="p4-day-num" style="color:${col};border-color:${col}40;">Day ${day.day}</div>
+        <div class="p4-day-title">${day.title || ''}</div>
+        <div class="p4-day-toggle">▾</div>
+      </div>
+      <div class="p4-day-body">${activitiesHTML}</div>
+    `;
+    container.appendChild(el);
+    dayEls.push(el);
+  });
+
+  // ── Bottom CTA ──
+  const cta = document.createElement('div');
+  cta.style.cssText = 'margin-top:2rem;text-align:center;padding:2rem 1rem;';
+  cta.innerHTML = `
+    <p style="font-family:'Playfair Display',serif;font-size:1.25rem;font-weight:700;color:white;margin-bottom:0.5rem;">Ready to go?</p>
+    <p style="color:rgba(255,255,255,0.45);font-size:0.85rem;margin-bottom:1.5rem;">Your ${numDays}-day ${country} adventure is planned. Start booking!</p>
+    <div style="display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;">
+      <button onclick="window.print()" style="padding:0.75rem 1.6rem;border-radius:40px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);color:white;font-family:'DM Sans',sans-serif;font-weight:600;font-size:0.85rem;cursor:pointer;transition:all 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.12)'" onmouseout="this.style.background='rgba(255,255,255,0.06)'">🖨 Print Itinerary</button>
+      <button onclick="generateItinerary()" style="padding:0.75rem 1.6rem;border-radius:40px;border:none;background:linear-gradient(135deg,#00d4b8,#8b5cf6);color:white;font-family:'DM Sans',sans-serif;font-weight:700;font-size:0.85rem;cursor:pointer;box-shadow:0 8px 28px rgba(0,212,184,0.3);transition:all 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">✨ Regenerate</button>
+      <button onclick="document.getElementById('dot5').style.display='';goTo(5)" style="padding:0.75rem 1.6rem;border-radius:40px;border:none;background:linear-gradient(135deg,#f0c040,#ff6b35);color:white;font-family:'DM Sans',sans-serif;font-weight:700;font-size:0.85rem;cursor:pointer;box-shadow:0 8px 28px rgba(240,192,64,0.35);transition:all 0.2s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">🧩 Pick a City &amp; Build Puzzle</button>
+    </div>
+  `;
+  container.appendChild(cta);
+}
+
+let allExpanded = false;
+function toggleAllDays() {
+  allExpanded = !allExpanded;
+  document.querySelectorAll('.p4-day').forEach(d => {
+    if (allExpanded) d.classList.add('open');
+    else d.classList.remove('open');
+  });
+  const btn = document.getElementById('expandAllBtn');
+  if (btn) btn.textContent = allExpanded ? 'Collapse All ▴' : 'Expand All ▾';
+}
+
+function toggleDay(card) {
+  card.classList.toggle('open');
+}
+
+
+
+// ====== STARS — page 0 ======
+const p0StarContainer = document.getElementById('starsP0');
+for (let i = 0; i < 120; i++) {
+  const s = document.createElement('div');
+  s.className = 'star-p0';
+  const sz = Math.random() * 2.5 + 0.5;
+  s.style.cssText = `width:${sz}px;height:${sz}px;top:${Math.random()*100}%;left:${Math.random()*100}%;animation-duration:${Math.random()*5+2}s;animation-delay:${Math.random()*8}s;opacity:${Math.random()*0.5+0.1}`;
+  p0StarContainer.appendChild(s);
+}
+
+// ====== PAGE 1 SLIDESHOW ======
+const slides = document.querySelectorAll('#page1 .slide');
+const destNames = ['Swiss Alps','Tulum','Santorini','Amalfi Coast','Kyoto','Bali','Patagonia','Taj Mahal','Rome','Paris'];
+const destCountries = ['SWITZERLAND','MEXICO','GREECE','ITALY','JAPAN','INDONESIA','ARGENTINA','INDIA','ITALY','FRANCE'];
+const dots = document.querySelectorAll('.ticker-dot');
+const fill = document.getElementById('slideProgressFill');
+let currentSlide = 0;
+let slideTimer = null;
+const SLIDE_DURATION = 5000;
+
+function jumpSlide(n) {
+  slides[currentSlide].classList.remove('active');
+  dots[currentSlide].classList.remove('active');
+  currentSlide = n;
+  slides[currentSlide].classList.add('active');
+  dots[currentSlide].classList.add('active');
+  document.getElementById('destNameText').textContent = destNames[currentSlide];
+  document.getElementById('destCountryText').textContent = destCountries[currentSlide];
+  resetProgress();
+}
+function nextSlide() { jumpSlide((currentSlide + 1) % slides.length); }
+function resetProgress() {
+  if (slideTimer) clearInterval(slideTimer);
+  fill.style.transition = 'none';
+  fill.style.width = '0%';
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      fill.style.transition = `width ${SLIDE_DURATION}ms linear`;
+      fill.style.width = '100%';
+    });
+  });
+  slideTimer = setInterval(nextSlide, SLIDE_DURATION);
+}
+resetProgress();
+
+// Stars p2
+const p2s = document.getElementById('p2stars');
+for (let i = 0; i < 90; i++) {
+  const s = document.createElement('div');
+  s.className = 'p2-star';
+  s.style.cssText = `top:${Math.random()*100}%;left:${Math.random()*100}%;animation-duration:${Math.random()*5+2}s;animation-delay:${Math.random()*7}s;opacity:${Math.random()*0.35+0.1}`;
+  p2s.appendChild(s);
+}
+
+// Sound
+function playWhoosh() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const buf = ctx.createBuffer(1, Math.round(ctx.sampleRate*0.9), ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1)*Math.pow(1-i/d.length,1.8)*0.35;
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const f = ctx.createBiquadFilter(); f.type='bandpass';
+    f.frequency.setValueAtTime(1000, ctx.currentTime);
+    f.frequency.exponentialRampToValueAtTime(180, ctx.currentTime+0.9);
+    f.Q.value = 0.8;
+    src.connect(f); f.connect(ctx.destination); src.start();
+  } catch(e) {}
+}
+
+function playChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [523, 659, 784].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.18, ctx.currentTime + i*0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i*0.12 + 0.5);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + i*0.12);
+      osc.stop(ctx.currentTime + i*0.12 + 0.6);
+    });
+  } catch(e) {}
+}
+
+// Navigation
+let current = 0;
+function goTo(n) {
+  if (n === current) return;
+  const cur = document.getElementById('page' + current);
+  const nxt = document.getElementById('page' + n);
+  if (!cur || !nxt) return;
+  cur.classList.remove('active'); cur.classList.add('exit');
+  setTimeout(() => cur.classList.remove('exit'), 900);
+  nxt.classList.add('active');
+  nxt.scrollTop = 0;
+  current = n;
+  document.querySelectorAll('.nav-dot').forEach((d, i) => d.classList.toggle('active', i === n));
+  // Trigger deck-deal entrance for page 3
+  if (n === 3) {
+    // Hide all cards immediately so they don't flash before deck forms
+    document.querySelectorAll('.vp-card').forEach(c => {
+      c.classList.remove('card-visible','card-dealing','deck-stacked');
+      c.style.opacity = '0';
+      c.style.transform = '';
+    });
+    // Wait for page slide transition (0.9s) then deal
+    setTimeout(() => triggerCardEntrance(), 950);
+  }
+}
+
+// ====== COUNTRY DATA + QUIZ ======
+const countries = [
+  {name:'India', flag:'🇮🇳', currency:'INR', symbol:'₹', min:5000, max:500000, step:5000, labels:['₹5K','₹1L','₹2.5L','₹5L+'], defaultVal:75000, format: v => { const n=parseInt(v); return n>=100000?`₹${(n/100000).toFixed(1)}L`:`₹${Math.round(n/1000)}K`; }, label:'🇮🇳 Indian Rupee (INR)'},
+  {name:'United States', flag:'🇺🇸', currency:'USD', symbol:'$', min:500, max:50000, step:500, labels:['$500','$5K','$15K','$50K+'], defaultVal:5000, format: v => { const n=parseInt(v); return n>=1000?`$${(n/1000).toFixed(1)}K`:`$${n}`; }, label:'🇺🇸 US Dollar (USD)'},
+  {name:'United Kingdom', flag:'🇬🇧', currency:'GBP', symbol:'£', min:500, max:30000, step:500, labels:['£500','£3K','£10K','£30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`£${(n/1000).toFixed(1)}K`:`£${n}`; }, label:'🇬🇧 British Pound (GBP)'},
+  {name:'European Union', flag:'🇪🇺', currency:'EUR', symbol:'€', min:500, max:30000, step:500, labels:['€500','€3K','€10K','€30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`€${(n/1000).toFixed(1)}K`:`€${n}`; }, label:'🇪🇺 Euro (EUR)'},
+  {name:'Japan', flag:'🇯🇵', currency:'JPY', symbol:'¥', min:50000, max:5000000, step:50000, labels:['¥50K','¥500K','¥1.5M','¥5M+'], defaultVal:500000, format: v => { const n=parseInt(v); return n>=1000000?`¥${(n/1000000).toFixed(1)}M`:`¥${Math.round(n/1000)}K`; }, label:'🇯🇵 Japanese Yen (JPY)'},
+  {name:'Australia', flag:'🇦🇺', currency:'AUD', symbol:'A$', min:500, max:50000, step:500, labels:['A$500','A$5K','A$15K','A$50K+'], defaultVal:5000, format: v => { const n=parseInt(v); return n>=1000?`A$${(n/1000).toFixed(1)}K`:`A$${n}`; }, label:'🇦🇺 Australian Dollar (AUD)'},
+  {name:'Canada', flag:'🇨🇦', currency:'CAD', symbol:'C$', min:500, max:50000, step:500, labels:['C$500','C$5K','C$15K','C$50K+'], defaultVal:5000, format: v => { const n=parseInt(v); return n>=1000?`C$${(n/1000).toFixed(1)}K`:`C$${n}`; }, label:'🇨🇦 Canadian Dollar (CAD)'},
+  {name:'Singapore', flag:'🇸🇬', currency:'SGD', symbol:'S$', min:500, max:30000, step:500, labels:['S$500','S$3K','S$10K','S$30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`S$${(n/1000).toFixed(1)}K`:`S$${n}`; }, label:'🇸🇬 Singapore Dollar (SGD)'},
+  {name:'UAE', flag:'🇦🇪', currency:'AED', symbol:'AED', min:2000, max:200000, step:2000, labels:['AED 2K','AED 20K','AED 60K','AED 200K+'], defaultVal:20000, format: v => { const n=parseInt(v); return n>=1000?`AED ${(n/1000).toFixed(0)}K`:`AED ${n}`; }, label:'🇦🇪 UAE Dirham (AED)'},
+  {name:'Thailand', flag:'🇹🇭', currency:'THB', symbol:'฿', min:5000, max:500000, step:5000, labels:['฿5K','฿50K','฿150K','฿500K+'], defaultVal:50000, format: v => { const n=parseInt(v); return n>=1000?`฿${(n/1000).toFixed(0)}K`:`฿${n}`; }, label:'🇹🇭 Thai Baht (THB)'},
+  {name:'South Korea', flag:'🇰🇷', currency:'KRW', symbol:'₩', min:500000, max:50000000, step:500000, labels:['₩500K','₩5M','₩15M','₩50M+'], defaultVal:5000000, format: v => { const n=parseInt(v); return n>=1000000?`₩${(n/1000000).toFixed(1)}M`:`₩${(n/1000).toFixed(0)}K`; }, label:'🇰🇷 Korean Won (KRW)'},
+  {name:'Brazil', flag:'🇧🇷', currency:'BRL', symbol:'R$', min:1000, max:100000, step:1000, labels:['R$1K','R$10K','R$30K','R$100K+'], defaultVal:10000, format: v => { const n=parseInt(v); return n>=1000?`R$${(n/1000).toFixed(0)}K`:`R$${n}`; }, label:'🇧🇷 Brazilian Real (BRL)'},
+  {name:'Mexico', flag:'🇲🇽', currency:'MXN', symbol:'MX$', min:2000, max:200000, step:2000, labels:['MX$2K','MX$20K','MX$60K','MX$200K+'], defaultVal:20000, format: v => { const n=parseInt(v); return n>=1000?`MX$${(n/1000).toFixed(0)}K`:`MX$${n}`; }, label:'🇲🇽 Mexican Peso (MXN)'},
+  {name:'China', flag:'🇨🇳', currency:'CNY', symbol:'¥', min:1000, max:100000, step:1000, labels:['¥1K','¥10K','¥30K','¥100K+'], defaultVal:10000, format: v => { const n=parseInt(v); return n>=1000?`¥${(n/1000).toFixed(0)}K`:`¥${n}`; }, label:'🇨🇳 Chinese Yuan (CNY)'},
+  {name:'Switzerland', flag:'🇨🇭', currency:'CHF', symbol:'CHF', min:500, max:30000, step:500, labels:['CHF 500','CHF 3K','CHF 10K','CHF 30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`CHF ${(n/1000).toFixed(1)}K`:`CHF ${n}`; }, label:'🇨🇭 Swiss Franc (CHF)'},
+  {name:'South Africa', flag:'🇿🇦', currency:'ZAR', symbol:'R', min:2000, max:200000, step:2000, labels:['R2K','R20K','R60K','R200K+'], defaultVal:20000, format: v => { const n=parseInt(v); return n>=1000?`R${(n/1000).toFixed(0)}K`:`R${n}`; }, label:'🇿🇦 South African Rand (ZAR)'},
+  {name:'Indonesia', flag:'🇮🇩', currency:'IDR', symbol:'Rp', min:500000, max:50000000, step:500000, labels:['Rp500K','Rp5M','Rp15M','Rp50M+'], defaultVal:5000000, format: v => { const n=parseInt(v); return n>=1000000?`Rp${(n/1000000).toFixed(1)}M`:`Rp${(n/1000).toFixed(0)}K`; }, label:'🇮🇩 Indonesian Rupiah (IDR)'},
+  {name:'France', flag:'🇫🇷', currency:'EUR', symbol:'€', min:500, max:30000, step:500, labels:['€500','€3K','€10K','€30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`€${(n/1000).toFixed(1)}K`:`€${n}`; }, label:'🇫🇷 Euro (EUR)'},
+  {name:'Italy', flag:'🇮🇹', currency:'EUR', symbol:'€', min:500, max:30000, step:500, labels:['€500','€3K','€10K','€30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`€${(n/1000).toFixed(1)}K`:`€${n}`; }, label:'🇮🇹 Euro (EUR)'},
+  {name:'Spain', flag:'🇪🇸', currency:'EUR', symbol:'€', min:500, max:30000, step:500, labels:['€500','€3K','€10K','€30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`€${(n/1000).toFixed(1)}K`:`€${n}`; }, label:'🇪🇸 Euro (EUR)'},
+  {name:'Germany', flag:'🇩🇪', currency:'EUR', symbol:'€', min:500, max:30000, step:500, labels:['€500','€3K','€10K','€30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`€${(n/1000).toFixed(1)}K`:`€${n}`; }, label:'🇩🇪 Euro (EUR)'},
+  {name:'New Zealand', flag:'🇳🇿', currency:'NZD', symbol:'NZ$', min:500, max:50000, step:500, labels:['NZ$500','NZ$5K','NZ$15K','NZ$50K+'], defaultVal:5000, format: v => { const n=parseInt(v); return n>=1000?`NZ$${(n/1000).toFixed(1)}K`:`NZ$${n}`; }, label:'🇳🇿 New Zealand Dollar (NZD)'},
+  {name:'Malaysia', flag:'🇲🇾', currency:'MYR', symbol:'RM', min:500, max:50000, step:500, labels:['RM500','RM5K','RM15K','RM50K+'], defaultVal:5000, format: v => { const n=parseInt(v); return n>=1000?`RM${(n/1000).toFixed(1)}K`:`RM${n}`; }, label:'🇲🇾 Malaysian Ringgit (MYR)'},
+  {name:'Philippines', flag:'🇵🇭', currency:'PHP', symbol:'₱', min:5000, max:500000, step:5000, labels:['₱5K','₱50K','₱150K','₱500K+'], defaultVal:50000, format: v => { const n=parseInt(v); return n>=1000?`₱${(n/1000).toFixed(0)}K`:`₱${n}`; }, label:'🇵🇭 Philippine Peso (PHP)'},
+  {name:'Vietnam', flag:'🇻🇳', currency:'VND', symbol:'₫', min:500000, max:50000000, step:500000, labels:['₫500K','₫5M','₫15M','₫50M+'], defaultVal:5000000, format: v => { const n=parseInt(v); return n>=1000000?`₫${(n/1000000).toFixed(1)}M`:`₫${(n/1000).toFixed(0)}K`; }, label:'🇻🇳 Vietnamese Dong (VND)'},
+  {name:'Portugal', flag:'🇵🇹', currency:'EUR', symbol:'€', min:500, max:30000, step:500, labels:['€500','€3K','€10K','€30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`€${(n/1000).toFixed(1)}K`:`€${n}`; }, label:'🇵🇹 Euro (EUR)'},
+  {name:'Greece', flag:'🇬🇷', currency:'EUR', symbol:'€', min:500, max:30000, step:500, labels:['€500','€3K','€10K','€30K+'], defaultVal:3000, format: v => { const n=parseInt(v); return n>=1000?`€${(n/1000).toFixed(1)}K`:`€${n}`; }, label:'🇬🇷 Euro (EUR)'},
+  {name:'Turkey', flag:'🇹🇷', currency:'TRY', symbol:'₺', min:5000, max:500000, step:5000, labels:['₺5K','₺50K','₺150K','₺500K+'], defaultVal:50000, format: v => { const n=parseInt(v); return n>=1000?`₺${(n/1000).toFixed(0)}K`:`₺${n}`; }, label:'🇹🇷 Turkish Lira (TRY)'},
+  {name:'Egypt', flag:'🇪🇬', currency:'EGP', symbol:'E£', min:2000, max:200000, step:2000, labels:['E£2K','E£20K','E£60K','E£200K+'], defaultVal:20000, format: v => { const n=parseInt(v); return n>=1000?`E£${(n/1000).toFixed(0)}K`:`E£${n}`; }, label:'🇪🇬 Egyptian Pound (EGP)'},
+  {name:'Argentina', flag:'🇦🇷', currency:'ARS', symbol:'AR$', min:10000, max:1000000, step:10000, labels:['AR$10K','AR$100K','AR$300K','AR$1M+'], defaultVal:100000, format: v => { const n=parseInt(v); return n>=1000?`AR$${(n/1000).toFixed(0)}K`:`AR$${n}`; }, label:'🇦🇷 Argentine Peso (ARS)'},
+];
+
+let selectedCountry = countries[0]; // default India
+
+function renderCountryList(filter = '') {
+  const list = document.getElementById('countryList');
+  const filtered = countries.filter(c => c.name.toLowerCase().includes(filter.toLowerCase()));
+  list.innerHTML = filtered.map(c =>
+    `<div class="country-item" onclick="selectCountry('${c.name}')">
+      <span class="flag">${c.flag}</span>
+      <span>${c.name}</span>
+      <span style="margin-left:auto;font-size:0.75rem;color:rgba(255,255,255,0.3)">${c.currency}</span>
+    </div>`
+  ).join('');
+}
+
+function filterCountries(v) { renderCountryList(v); }
+
+function selectCountry(name) {
+  selectedCountry = countries.find(c => c.name === name);
+  document.getElementById('selectedBadge').className = 'selected-country-badge show';
+  document.getElementById('selectedFlag').textContent = selectedCountry.flag;
+  document.getElementById('selectedName').textContent = `${selectedCountry.name} — ${selectedCountry.currency}`;
+  document.getElementById('countrySearchBox').style.display = 'none';
+  document.getElementById('countryList').style.display = 'none';
+  updateBudgetConfig();
+}
+
+function clearCountry() {
+  document.getElementById('selectedBadge').className = 'selected-country-badge';
+  document.getElementById('countrySearchBox').style.display = 'block';
+  document.getElementById('countryList').style.display = 'block';
+  document.getElementById('countryInput').value = '';
+  renderCountryList();
+}
+
+function updateBudgetConfig() {
+  const c = selectedCountry;
+  const range = document.getElementById('budgetRange');
+  range.min = c.min; range.max = c.max; range.step = c.step; range.value = c.defaultVal;
+  document.getElementById('currencyLabel').textContent = c.label;
+  const labels = document.getElementById('rngLabels');
+  labels.innerHTML = c.labels.map(l => `<span>${l}</span>`).join('');
+  updateBudget(c.defaultVal);
+}
+
+function updateBudget(v) {
+  const d = selectedCountry.format(v);
+  document.getElementById('budgetDisplay').innerHTML = d + ' <span>total</span>';
+}
+
+// Init complete
+renderCountryList();
+updateBudgetConfig();const bubbles = [
+  "G'day, traveller! 🌿 I'm <strong>Koko</strong>, your travel guide koala. Let's find your <strong>perfect trip</strong>!",
+  "Ooh, what a destination! 🌍 Now let's talk budget — in your local currency!",
+  "Ooh, a budget adventurer! 🎒 Now — how many days can you escape the daily grind?",
+  "Almost there! 🌟 One last thing — who's coming along for the ride?"
+];
+
+const progWidths = ['25%', '50%', '75%', '100%'];
+
+function nextQ(n) {
+  document.querySelector('.q-panel.active').classList.remove('active');
+  document.getElementById('q' + n).classList.add('active');
+  document.getElementById('progress').style.width = progWidths[n];
+  document.getElementById('bubble-text').innerHTML = bubbles[n];
+}
+
+function selectDay(el) { document.querySelectorAll('.day-btn').forEach(b => b.classList.remove('selected')); el.classList.add('selected'); }
+function selectWho(el) { document.querySelectorAll('.who-btn').forEach(b => b.classList.remove('selected')); el.classList.add('selected'); }
+
+// ====== DAYS STEPPER ======
+let selectedDays = 7;
+const MIN_DAYS = 1, MAX_DAYS = 30;
+
+function stepDays(delta) {
+  setDays(selectedDays + delta);
+  playStepClick();
+}
+
+function setDays(n) {
+  selectedDays = Math.min(MAX_DAYS, Math.max(MIN_DAYS, n));
+  const numEl = document.getElementById('stepNum');
+  const downBtn = document.getElementById('stepDown');
+  const upBtn = document.getElementById('stepUp');
+  if (numEl) {
+    numEl.classList.remove('bump');
+    void numEl.offsetWidth; // reflow
+    numEl.classList.add('bump');
+    numEl.textContent = selectedDays;
+  }
+  if (downBtn) downBtn.disabled = selectedDays <= MIN_DAYS;
+  if (upBtn) upBtn.disabled = selectedDays >= MAX_DAYS;
+  // Update preset highlights
+  const presetMap = { 3:0, 5:1, 7:2, 10:3, 14:4, 21:5 };
+  document.querySelectorAll('.stepper-preset').forEach((el, i) => {
+    el.classList.toggle('active', i === presetMap[selectedDays]);
+  });
+}
+
+function playStepClick() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(700, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(500, ctx.currentTime + 0.06);
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + 0.09);
+  } catch(e) {}
+}
+
+// Init stepper
+setDays(7);
+
+
+// ====== PAGE 3 — CINEMATIC CARD SYSTEM ======
+
+// Stars
+const vpS = document.getElementById('vpStars');
+if (vpS) {
+  for (let i = 0; i < 130; i++) {
+    const s = document.createElement('div');
+    const sz = Math.random()*1.8+0.4;
+    s.style.cssText = `position:absolute;width:${sz}px;height:${sz}px;border-radius:50%;background:white;top:${Math.random()*100}%;left:${Math.random()*100}%;animation:twinkle ${Math.random()*4+2}s linear ${Math.random()*6}s infinite;opacity:${Math.random()*0.4+0.05}`;
+    vpS.appendChild(s);
+  }
+}
+
+// ---- AMBIENT PARTICLE CONFIGS per vibe ----
+const ambientConfigs = {
+  trendy:    { type:'neon',     colors:['#c4b5fd','#8b5cf6','#e879f9','#67e8f9'] },
+  heritage:  { type:'rays',     colors:['#fde68a','#f59e0b','#fbbf24','#fff8e0'] },
+  adventure: { type:'fog',      colors:['rgba(255,140,60,0.6)','rgba(255,100,30,0.4)','rgba(255,200,100,0.3)'] },
+  relax:     { type:'waves',    colors:['#6ee7b7','#34d399','#a7f3d0','rgba(0,212,184,0.5)'] },
+  capture:   { type:'sparkle',  colors:['#e9d5ff','#c4b5fd','#f0abfc','white'] },
+  luxury:    { type:'shimmer',  colors:['#f0c040','#fde68a','rgba(255,215,100,0.7)','white'] },
+  hidden:    { type:'firefly',  colors:['#93c5fd','#60a5fa','#bfdbfe','#e0f2fe'] },
+  natural:   { type:'leaves',   colors:['#86efac','#4ade80','#bbf7d0','#d1fae5'] },
+};
+
+// Ambient particle renderer
+function startAmbient(canvas, vibe) {
+  const cfg = ambientConfigs[vibe];
+  if (!cfg || !canvas) return;
+  const ctx = canvas.getContext('2d');
+  let W = canvas.offsetWidth, H = canvas.offsetHeight;
+  canvas.width = W; canvas.height = H;
+  const particles = [];
+  let raf;
+
+  function resize() {
+    W = canvas.offsetWidth; H = canvas.offsetHeight;
+    canvas.width = W; canvas.height = H;
+  }
+
+  // Build particles per type
+  function init() {
+    particles.length = 0;
+    const count = cfg.type === 'rays' ? 6 : cfg.type === 'fog' ? 5 : 18;
+    for (let i = 0; i < count; i++) {
+      const c = cfg.colors[Math.floor(Math.random()*cfg.colors.length)];
+      particles.push({
+        x: Math.random()*W, y: Math.random()*H,
+        r: Math.random()*3+1, opacity: Math.random()*0.7+0.1,
+        vx: (Math.random()-0.5)*0.6, vy: Math.random()*-0.5-0.1,
+        life: Math.random(), speed: Math.random()*0.008+0.004,
+        size: Math.random()*6+2, color: c,
+        phase: Math.random()*Math.PI*2,
+        angle: Math.random()*Math.PI*2, len: Math.random()*H*0.6+H*0.2,
+      });
+    }
+  }
+
+  function draw(t) {
+    ctx.clearRect(0, 0, W, H);
+    const time = t * 0.001;
+
+    if (cfg.type === 'neon') {
+      // Neon floating orbs
+      particles.forEach(p => {
+        p.life += p.speed;
+        if (p.life > 1) { p.life = 0; p.x = Math.random()*W; p.y = H + 10; p.color = cfg.colors[Math.floor(Math.random()*cfg.colors.length)]; }
+        p.y += p.vy; p.x += Math.sin(time + p.phase)*0.5;
+        const alpha = p.life < 0.2 ? p.life*5 : p.life > 0.8 ? (1-p.life)*5 : 1;
+        ctx.beginPath();
+        const g = ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,p.size*2);
+        g.addColorStop(0, p.color.replace(')', `,${alpha*0.9})`).replace('rgb','rgba'));
+        g.addColorStop(1, 'transparent');
+        ctx.fillStyle = g; ctx.arc(p.x,p.y,p.size*2,0,Math.PI*2); ctx.fill();
+      });
+    } else if (cfg.type === 'rays') {
+      // Golden light rays from top
+      particles.forEach((p, i) => {
+        const x = (W / (particles.length+1)) * (i+1);
+        const pulse = 0.3 + Math.sin(time*0.8 + p.phase)*0.2;
+        const g = ctx.createLinearGradient(x, 0, x + 30, H*0.7);
+        g.addColorStop(0, `rgba(253,230,138,${pulse})`);
+        g.addColorStop(1, 'transparent');
+        ctx.save(); ctx.globalAlpha = pulse*0.6;
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.moveTo(x-8, 0); ctx.lineTo(x+8, 0); ctx.lineTo(x+40, H*0.7); ctx.lineTo(x-10, H*0.7); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      });
+    } else if (cfg.type === 'fog') {
+      // Moving fog wisps
+      particles.forEach(p => {
+        p.x += Math.sin(time*0.4 + p.phase)*0.8 + 0.3;
+        if (p.x > W+80) p.x = -80;
+        const pulse = 0.15 + Math.sin(time*0.5 + p.phase)*0.08;
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 60);
+        g.addColorStop(0, p.color.includes('rgba') ? p.color : `rgba(255,140,60,${pulse})`);
+        g.addColorStop(1, 'transparent');
+        ctx.beginPath(); ctx.arc(p.x, p.y, 60, 0, Math.PI*2);
+        ctx.fillStyle = g; ctx.fill();
+      });
+    } else if (cfg.type === 'waves') {
+      // Smooth sine waves
+      for (let w = 0; w < 3; w++) {
+        ctx.beginPath();
+        ctx.strokeStyle = cfg.colors[w % cfg.colors.length];
+        ctx.globalAlpha = 0.18 - w*0.04;
+        ctx.lineWidth = 1.5;
+        for (let x = 0; x <= W; x += 2) {
+          const y = H*0.5 + Math.sin((x/W)*Math.PI*3 + time + w*1.2)*15 + Math.sin((x/W)*Math.PI*5 + time*1.3 + w)*8;
+          x === 0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+        }
+        ctx.stroke(); ctx.globalAlpha = 1;
+      }
+    } else if (cfg.type === 'sparkle') {
+      // Sparkling stars
+      particles.forEach(p => {
+        p.life += p.speed*1.5;
+        if (p.life > 1) { p.life=0; p.x=Math.random()*W; p.y=Math.random()*H; }
+        const alpha = Math.sin(p.life*Math.PI)*0.9;
+        const sz = p.r * (0.5 + Math.sin(p.life*Math.PI)*0.5);
+        ctx.save(); ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.beginPath(); ctx.arc(p.x, p.y, sz, 0, Math.PI*2); ctx.fill();
+        // cross sparkle
+        ctx.strokeStyle = p.color; ctx.lineWidth = sz*0.5;
+        ctx.beginPath(); ctx.moveTo(p.x-sz*2,p.y); ctx.lineTo(p.x+sz*2,p.y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(p.x,p.y-sz*2); ctx.lineTo(p.x,p.y+sz*2); ctx.stroke();
+        ctx.restore();
+      });
+    } else if (cfg.type === 'shimmer') {
+      // Gold shimmer bands
+      for (let s = 0; s < 4; s++) {
+        const x = ((time*60 + s*W/4) % (W+100)) - 50;
+        const g = ctx.createLinearGradient(x,0,x+40,0);
+        g.addColorStop(0,'transparent'); g.addColorStop(0.5,`rgba(240,192,64,0.25)`); g.addColorStop(1,'transparent');
+        ctx.fillStyle = g; ctx.fillRect(x, 0, 40, H);
+      }
+    } else if (cfg.type === 'firefly') {
+      // Fireflies
+      particles.forEach(p => {
+        p.x += Math.cos(time + p.phase)*0.8; p.y += Math.sin(time*0.7 + p.phase)*0.6;
+        if (p.x<0)p.x=W; if(p.x>W)p.x=0; if(p.y<0)p.y=H; if(p.y>H)p.y=0;
+        const alpha = 0.4 + Math.sin(time*2+p.phase)*0.35;
+        const g = ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,p.size*2.5);
+        g.addColorStop(0, `rgba(147,197,253,${alpha})`); g.addColorStop(1,'transparent');
+        ctx.beginPath(); ctx.arc(p.x,p.y,p.size*2.5,0,Math.PI*2); ctx.fillStyle=g; ctx.fill();
+      });
+    } else if (cfg.type === 'leaves') {
+      // Drifting leaf shapes
+      particles.forEach(p => {
+        p.y += 0.4; p.x += Math.sin(time*0.5+p.phase)*0.5;
+        p.angle += 0.01;
+        if (p.y > H+10) { p.y=-10; p.x=Math.random()*W; }
+        const alpha = 0.25 + Math.sin(time+p.phase)*0.1;
+        ctx.save(); ctx.globalAlpha=alpha; ctx.translate(p.x,p.y); ctx.rotate(p.angle);
+        ctx.beginPath(); ctx.ellipse(0,0,p.size*0.7,p.size*1.4,0,0,Math.PI*2);
+        ctx.fillStyle=p.color; ctx.fill(); ctx.restore();
+      });
+    }
+    raf = requestAnimationFrame(draw);
+  }
+
+  init(); raf = requestAnimationFrame(draw);
+  return () => cancelAnimationFrame(raf);
+}
+
+// ---- 3D TILT + MAGNETIC + AMBIENT SYSTEM ----
+const vpCards = document.querySelectorAll('.vp-card');
+const ambientStopFns = new Map();
+
+vpCards.forEach((card) => {
+  const bg = card.querySelector('.vp-card-bg');
+  const content = card.querySelector('.vp-card-content');
+  const canvas = card.querySelector('.vp-ambient-canvas');
+  const vibe = card.dataset.vibe;
+
+  // Magnetic + 3D tilt
+  card.addEventListener('mousemove', (e) => {
+    const r = card.getBoundingClientRect();
+    const cx = r.left + r.width/2, cy = r.top + r.height/2;
+    const dx = e.clientX - cx, dy = e.clientY - cy;
+    const rotY = (dx / r.width) * 14;
+    const rotX = -(dy / r.height) * 10;
+    // Magnetic pull
+    const mx = dx * 0.04, my = dy * 0.04;
+    card.style.transform = `translate(${mx}px, ${my-10}px) rotateX(${rotX}deg) rotateY(${rotY}deg) scale(1.02)`;
+    // Parallax: bg moves slower, content moves with cursor
+    if (bg) bg.style.transform = `scale(1.12) translate(${-dx*0.015}px, ${-dy*0.012}px)`;
+    if (content) content.style.transform = `translateZ(20px) translate(${dx*0.018}px, ${dy*0.012}px)`;
+  });
+
+  card.addEventListener('mouseleave', () => {
+    // Soft bounce back
+    card.style.transition = 'transform 0.65s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.5s ease';
+    card.style.transform = 'translate(0,0) rotateX(0deg) rotateY(0deg) scale(1)';
+    if (bg) { bg.style.transition = 'transform 0.8s cubic-bezier(0.22,1,0.36,1)'; bg.style.transform = 'scale(1)'; }
+    if (content) { content.style.transition = 'transform 0.6s cubic-bezier(0.22,1,0.36,1)'; content.style.transform = 'translateZ(0) translate(0,0)'; }
+    // Stop ambient
+    const stop = ambientStopFns.get(card);
+    if (stop) { stop(); ambientStopFns.delete(card); }
+  });
+
+  card.addEventListener('mouseenter', () => {
+    card.style.transition = 'box-shadow 0.5s ease';
+    // Canvas resize
+    if (canvas) { canvas.width = card.offsetWidth; canvas.height = card.offsetHeight; }
+    // Start ambient
+    const stop = startAmbient(canvas, vibe);
+    if (stop) ambientStopFns.set(card, stop);
+  });
+
+  // Click → expand
+  card.addEventListener('click', () => openExpand(card));
+});
+
+// ---- STAGGERED ENTRANCE ----
+// ---- DECK DEAL ANIMATION ----
+function triggerCardEntrance() {
+  const cards = Array.from(document.querySelectorAll('.vp-card'));
+  const grid  = document.querySelector('.vp-grid');
+  if (!grid || !cards.length) return;
+
+  // Reset all cards to invisible/pre-deal state
+  cards.forEach(c => {
+    c.classList.remove('card-visible','card-dealing','deck-stacked');
+    c.style.opacity = '0';
+    c.style.transform = '';
+  });
+
+  // Measure each card's center relative to the grid center
+  const gridRect = grid.getBoundingClientRect();
+  const gCX = gridRect.left + gridRect.width  / 2;
+  const gCY = gridRect.top  + gridRect.height / 2;
+
+  // Assign stacked offsets — slight fan so you can tell it's a deck
+  const stackOffsets = [
+    { tx:  0,  ty:  0, rot:  0  },
+    { tx: -4,  ty: -3, rot: -3  },
+    { tx:  5,  ty: -6, rot:  4  },
+    { tx: -7,  ty: -9, rot: -6  },
+    { tx:  3,  ty:-12, rot:  5  },
+    { tx: -5,  ty:-15, rot: -7  },
+    { tx:  6,  ty:-18, rot:  6  },
+    { tx: -3,  ty:-21, rot: -4  },
+  ];
+
+  // Stack all cards at center (transform = distance from final pos → deck center)
+  cards.forEach((card, i) => {
+    const rect = card.getBoundingClientRect();
+    const cCX  = rect.left + rect.width  / 2;
+    const cCY  = rect.top  + rect.height / 2;
+    const dx   = gCX - cCX;   // how far card must travel from its grid spot to reach deck center
+    const dy   = gCY - cCY;
+
+    const off = stackOffsets[i % stackOffsets.length];
+    card.style.setProperty('--deal-tx',  `${dx + off.tx}px`);
+    card.style.setProperty('--deal-ty',  `${dy + off.ty}px`);
+    card.style.setProperty('--deal-rot', `${off.rot}deg`);
+    card.style.setProperty('--card-z',   String(i));
+
+    card.classList.add('deck-stacked');
+    card.style.opacity = '';
+  });
+
+  // Brief pause so player "sees" the deck, then deal cards one by one
+  const DEAL_DELAY = 160; // ms between each card
+  const PILE_SHOW  = 320; // ms to show stacked pile before dealing
+
+  setTimeout(() => {
+    cards.forEach((card, i) => {
+      setTimeout(() => {
+        card.classList.remove('deck-stacked');
+        card.classList.add('card-dealing');
+
+        // After animation completes, leave card in final resting state
+        setTimeout(() => {
+          card.classList.remove('card-dealing');
+          card.style.opacity   = '1';
+          card.style.transform = 'translate(0,0) rotate(0deg) scale(1)';
+          card.style.removeProperty('--deal-tx');
+          card.style.removeProperty('--deal-ty');
+          card.style.removeProperty('--deal-rot');
+        }, 680);
+      }, i * DEAL_DELAY);
+    });
+  }, PILE_SHOW);
+}
+
+// ---- EXPAND OVERLAY ----
+function openExpand(card) {
+  const overlay = document.getElementById('vpExpandOverlay');
+  const expandBg = document.getElementById('vpExpandBg');
+  const expandName = document.getElementById('vpExpandName');
+  const expandDesc = document.getElementById('vpExpandDesc');
+  const expandCta = document.getElementById('vpExpandCta');
+
+  expandBg.style.backgroundImage = `url('${card.dataset.img}')`;
+  expandName.textContent = card.querySelector('.vp-card-name').textContent;
+  expandDesc.textContent = card.dataset.desc;
+  expandCta.onclick = () => { closeExpand(); setTimeout(() => pickVibe(card.dataset.vibe), 400); };
+
+  overlay.style.display = 'flex';
+  requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add('open')));
+}
+
+function closeExpand(e) {
+  if (e && e.target !== document.getElementById('vpExpandOverlay')) return;
+  const overlay = document.getElementById('vpExpandOverlay');
+  overlay.classList.remove('open');
+  setTimeout(() => { overlay.style.display = 'none'; }, 750);
+}
+
+// Vibe pick
+const vibeNames = {
+  trendy: 'Trendy', heritage: 'Heritage Adventure',
+  relax: 'Relax & Unwind', capture: 'Capture & Create',
+  luxury: 'Luxury Escape', hidden: 'Hidden Gem', natural: 'Natural Retreat',
+  adventure: 'Adventure'
+};
+const vibeEmojis = {
+  trendy:'🔥', heritage:'🏛️', relax:'🧘',
+  capture:'📸', luxury:'✨', hidden:'💎', natural:'🌿',
+  adventure:'🧗'
+};
+
+function pickVibe(v) {
+  // Capture all user preferences for itinerary generation
+  userPrefs.country = selectedCountry ? selectedCountry.name : 'India';
+  const budgetVal = document.getElementById('budgetRange')?.value || 75000;
+  userPrefs.budget = parseInt(budgetVal);
+  userPrefs.budgetFormatted = selectedCountry ? selectedCountry.format(budgetVal) : '₹75K';
+  userPrefs.days = selectedDays || 7;
+  const whoBtn = document.querySelector('.who-btn.selected');
+  userPrefs.who = whoBtn ? whoBtn.textContent.trim().replace(/[^\w ]/g,'').trim() : 'Solo';
+  userPrefs.vibe = v;
+  window.userPrefs = userPrefs;
+
+  playChime();
+  document.getElementById('vibeEmoji').textContent = vibeEmojis[v] || '🌍';
+  document.getElementById('vibeWord').textContent = vibeNames[v] || 'amazing';
+  spawnConfetti();
+  document.getElementById('successOverlay').style.display = 'flex';
+}
+
+function spawnConfetti() {
+  const colors = ['#f0c040','#ff6b6b','#00d4b8','#8b5cf6','#a78bfa','#fff'];
+  for (let i = 0; i < 80; i++) {
+    const c = document.createElement('div');
+    const sz = Math.random()*10+6;
+    c.style.cssText = `position:fixed;z-index:9999;width:${sz}px;height:${sz}px;background:${colors[Math.floor(Math.random()*colors.length)]};border-radius:${Math.random()>.5?'50%':'3px'};left:${Math.random()*100}vw;top:-20px;animation:confettiFall ${Math.random()*2+1.5}s ${Math.random()}s ease-in forwards;transform:rotate(${Math.random()*360}deg)`;
+    document.body.appendChild(c);
+    setTimeout(() => c.remove(), 3800);
+  }
+}
+
+
+
+// ====== AUDIO: MECHANICAL KEYBOARD TYPING SOUND ======
+(function() {
+  // Decode base64 MP3 once
+  const b64 = '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QuSu+AXgce680GIP/pCiyhiigWoAQMMGAhgqRDRC9cFlo0biIAIkJwf//////////////////3P/5///////////////2hqEEEEEIPwlxn5oDv5gh+P45HqlERQRb/iAJCjMfZBkEQuEBuoMQA0YWL//jkB8AaiFi4nsLh/91NxtgZiA3YWgwGKWDlP/t2UwNnBOocuKRC+5OC6E6E///tt4ClCGCcAsMEAQbGw/EG7xAMA4g5v///bt1Bc2A0gBwgGkAcjB7oN4wudAYOLkBtwA5g6wshAtP////2bbb2//47C8QENvGZGGLgD0BJRH4ocQeYjMENEE6mCCgAAAAADOSPMMI85ySwcMgWegCFDFozMjjMykATLwjM5nICDcmvpnRZGiyCaiCpg4UBcKHCbRqTUe9/m+I5IDiEoEQ2Z5gGimxoREYaZGgqhQcEoCGM5/0eZYqmUPZpSGbDtGUEZE3mjNZiI6BmYx4VMZOQGPGMG5gCOZigGEgwQdmNBxj4oguQhhjpSXoDAcwgEBoCNHyphENmREqeKWocHUq1XySddhHIaEkvQELmOgoIBCqGAoBM2EQgQCAwoEQIAq2p7ggNa6z9LZX4QSJWg4GMUBjNgodHzFwExYAMuSgUdlqTGDczAhZgawKmLDrCDCw0yZSARyYwFmOgwQtp/M+LxBdPODGzo1ExADNNMRQNYuYIOMpMMIxIpTuDgoZBkMTIgUAAZYCi7xICioIYeEFnVrpvoAkIE1k/04TIARocMAoUS3V+lAARAyIAMgCl/oJkEwJBgIArrbIjiMB5fF93IMBAi0CeUCl225sFS8g2Hi5LxNaZTAbOGAKtl7JFrqrsvWHeAIABoQd9gERgFPJP/70mTKgA3Jg8umc2AAVYzJTcA0ADlF1Un5zgAByTNnEwLQARIrBr//////////////////Lv/////////////////D9inAlwAAAAAoBAAAAoAAAAAHpv/p/7mQ9G/8plw0f/+9N2X///Uaf/qpp5QHeHPGWOAJAMAUhMP//9rmZ8chmfDnk41Dc/////oFB55ZuMASiy+6Bv////9LmPvEukmBEBEEJ9cQIDApJzo0IhGRB6jmZJD60jIMRMWv8wCATABNM6Dg2aRTDyAJi4MiESEhkZAGegoZWLRc9CkSFRkMumZSqYfDYAQZqcOlQHgwWiIV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pi+aOYkxwBAMDBQKJhodIQ0Lj5CIl/GEHBBxqqKZKMGXhhlBIlSogguCQFr0HhACWAlP9Z4sGluSYtcIyYeFjUGA4GAkUkRmJo/s5S2Awcu5mKQQ0F7U2aKYgECAQMICzJQEx4FMbBwIIKAI6od09iYZFiEAAzD3XV8hxAgagHWUPBSu0xlKDJwQ0hMM6IjVpI1hHB2eHEQoJDQQkA/qNC7mmyCDIo/rhQ4+C5HYa428fgd53rkrtN6oKyEaaAMHiAIMIBgCEpRmNh4UEK8AxieiUYdGQNu+2UFMHi0UfxIB9G8fhgOL9v7AsVftuUJa2DRcYEzAxYSKAwsMHDRUAMHCDHARKtV4QaAYTMWB0Lv//////////////////13/////////////////l9N///////////qZM384GWBChZIP/20yMHAQRF0yiMmKeAnBdEP+LLIZ/97u1vIsHtijh8BDSfMy4gX0///96amQZO+txfht5WEAxfDAEKCkRvilCAf////////5pJVndHindXRTEyBoVGAMDkUA5CcDDAENOC4zoIz2SzNXBgLicgAZhICFgXmGxWYDExkgfEICBReMNggFGAwAThIHMEGwEThBsWWCxKiSKAgFKEAYFAwcJEgUYAIjKwEERMHtyDgIBGAOHzCBoFDBkqKZOcCSWEIAVADEQ4HCzVWgqomNiYkBmGhJcczQ5EIYGISn19MMXMnSzgKgCCzQwUBreeRa6PAXBE1TBwotuCQpU7lInNeQmwKkk50OF2IBTXfFB+DxgDkphAqCQQAA4wDAYCWiywwcEEIIY2CNdWKyGSJXhUJBw2aCXgkgM8GDGgptZ8RDAqlmHTxnCOeHuGqTZiRSGHhjojEmjMFQwQHPE+8DloVKUrVV//vSZIwADCBmUP5zYABS69pDwBwAerWbMXnOgAFDqyKDAUAAGoKXpCKWXU51fIaP8qQw8IABKPAQOdgcar+EAqIToGCJiQgYOGyBrKXMBQAwakjLdFjQLACm0ERacXo4b9qXvQ4jeReURTekHGSLVS3FhAt8oYHCQQGmEB4NBl4vyhJMPAzAQFGH//Mf/wycAAxEDQyGw////////9X7U/s6KQ385cq5OXmTDRIBYQGiuceRCECIcNUUs4iLnD5lz7GLj5MylR1Km5t9TTSo1InHCmWOEQsg4WPHbNPOI8qx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';
+
+  let audioCtx = null;
+  let audioBuffer = null;
+  let loading = false;
+  let loaded = false;
+
+  function ensureCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  }
+
+  function loadAudio(callback) {
+    if (loaded) { callback(); return; }
+    if (loading) return;
+    loading = true;
+    ensureCtx();
+    // Convert base64 to ArrayBuffer
+    const raw = atob(b64);
+    const buf = new ArrayBuffer(raw.length);
+    const view = new Uint8Array(buf);
+    for (let i = 0; i < raw.length; i++) view[i] = raw.charCodeAt(i);
+    audioCtx.decodeAudioData(buf, function(decoded) {
+      audioBuffer = decoded;
+      loaded = true;
+      console.log('Keyboard audio loaded, duration:', decoded.duration.toFixed(1) + 's');
+      callback();
+    }, function(err) {
+      console.warn('Audio decode error:', err);
+    });
+  }
+
+  let lastAt = 0;
+  function click() {
+    if (!loaded || !audioBuffer) return;
+    const now = audioCtx.currentTime;
+    if (now - lastAt < 0.06) return;
+    lastAt = now;
+    const src = audioCtx.createBufferSource();
+    src.buffer = audioBuffer;
+    const gain = audioCtx.createGain();
+    const offset = Math.random() * Math.max(0, Math.min(5, audioBuffer.duration - 0.18));
+    gain.gain.setValueAtTime(0.8, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+    src.connect(gain);
+    gain.connect(audioCtx.destination);
+    src.start(now, offset, 0.15);
+  }
+
+  function scheduleTypingClicks() {
+    // "Vayora" = 6 chars, CSS: delay 0.5s, duration 1.2s
+    const chars = 6;
+    const startMs = 520;
+    const intervalMs = 1200 / chars; // ~133ms per char
+    for (let i = 0; i < chars; i++) {
+      setTimeout(click, startMs + i * intervalMs);
+    }
+  }
+
+  // Called once on first user gesture
+  let triggered = false;
+  function trigger() {
+    if (triggered) return;
+    triggered = true;
+    loadAudio(scheduleTypingClicks);
+  }
+
+  // Attach to page0 and document
+  window.addEventListener('pointerdown', trigger, { once: true });
+  window.addEventListener('keydown', trigger, { once: true });
+  window.addEventListener('touchstart', trigger, { once: true });
+  // Try without gesture too (Chrome allows if no audio blocked)
+  setTimeout(function() {
+    try {
+      const testCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (testCtx.state === 'running') { testCtx.close(); trigger(); }
+      else testCtx.close();
+    } catch(e) {}
+  }, 50);
+})();
+
+
+// ====== GLOBE: 3D CANVAS RENDERER ======
+(function() {
+  const canvas = document.getElementById('globeCanvas');
+  const standCanvas = document.getElementById('standCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = 420, H = 420, R = 185;
+  const cx = W / 2, cy = H / 2;
+
+  // ── DRAW GOLDEN STAND (matches reference: curved arc, stem, wide oval base) ──
+  function drawStand() {
+    if (!standCanvas) return;
+    const sc = standCanvas.getContext('2d');
+    const sw = standCanvas.width, sh = standCanvas.height;
+    sc.clearRect(0, 0, sw, sh);
+    const mx = sw / 2;
+
+    // Gold palette helper
+    function gGrad(x1,y1,x2,y2) {
+      const g = sc.createLinearGradient(x1,y1,x2,y2);
+      g.addColorStop(0,    '#fff0a0');
+      g.addColorStop(0.12, '#f5c842');
+      g.addColorStop(0.35, '#d4920a');
+      g.addColorStop(0.55, '#b8780a');
+      g.addColorStop(0.75, '#d4a012');
+      g.addColorStop(0.9,  '#f0c040');
+      g.addColorStop(1,    '#fde080');
+      return g;
+    }
+    function gGradH(x1,y1,x2,y2) { // horizontal highlight version
+      const g = sc.createLinearGradient(x1,y1,x2,y2);
+      g.addColorStop(0,   '#8b6000');
+      g.addColorStop(0.2, '#d4a012');
+      g.addColorStop(0.45,'#ffe878');
+      g.addColorStop(0.55,'#fff4b0');
+      g.addColorStop(0.75,'#d4a012');
+      g.addColorStop(1,   '#8b6000');
+      return g;
+    }
+
+    // ── 1. WIDE OVAL BASE (flat disc like reference) ──
+    const baseY   = sh - 14;
+    const baseRX  = 98;
+    const baseRY  = 14;
+    const baseTop = baseY - baseRY * 0.55;
+
+    // Base shadow
+    const bShadow = sc.createRadialGradient(mx, baseY + 8, 0, mx, baseY + 8, 105);
+    bShadow.addColorStop(0, 'rgba(0,0,0,0.38)');
+    bShadow.addColorStop(1, 'transparent');
+    sc.beginPath();
+    sc.ellipse(mx, baseY + 8, 105, 16, 0, 0, Math.PI*2);
+    sc.fillStyle = bShadow; sc.fill();
+
+    // Base body (oval disc)
+    sc.save();
+    // Bottom half of ellipse (darker, side)
+    sc.beginPath();
+    sc.ellipse(mx, baseY, baseRX, baseRY, 0, 0, Math.PI*2);
+    sc.fillStyle = gGradH(mx - baseRX, baseY, mx + baseRX, baseY);
+    sc.fill();
+    // Top face of disc (brighter flat top)
+    sc.beginPath();
+    sc.ellipse(mx, baseTop, baseRX * 0.97, baseRY * 0.65, 0, 0, Math.PI*2);
+    sc.fillStyle = gGradH(mx - baseRX, baseTop, mx + baseRX, baseTop);
+    sc.fill();
+    // Rim highlight
+    sc.beginPath();
+    sc.ellipse(mx, baseTop, baseRX * 0.97, baseRY * 0.65, 0, 0, Math.PI*2);
+    sc.strokeStyle = 'rgba(255,248,180,0.7)';
+    sc.lineWidth = 1.5;
+    sc.stroke();
+    // Rim shadow edge
+    sc.beginPath();
+    sc.ellipse(mx, baseY, baseRX, baseRY, 0, 0, Math.PI*2);
+    sc.strokeStyle = 'rgba(80,50,0,0.5)';
+    sc.lineWidth = 1;
+    sc.stroke();
+    sc.restore();
+
+    // ── 2. STEM (curved, tapered like reference) ──
+    // Reference: stem is slightly curved/beveled, wider at base, narrowing upward
+    const stemBotY  = baseTop + 2;
+    const stemTopY  = stemBotY - 42;
+    const stemBotW  = 16;
+    const stemTopW  = 10;
+
+    sc.save();
+    sc.beginPath();
+    // Slightly curved sides using bezier
+    sc.moveTo(mx - stemTopW/2, stemTopY);
+    sc.bezierCurveTo(mx - stemTopW/2 - 2, stemTopY + 14, mx - stemBotW/2 - 2, stemBotY - 14, mx - stemBotW/2, stemBotY);
+    sc.lineTo(mx + stemBotW/2, stemBotY);
+    sc.bezierCurveTo(mx + stemBotW/2 + 2, stemBotY - 14, mx + stemTopW/2 + 2, stemTopY + 14, mx + stemTopW/2, stemTopY);
+    sc.closePath();
+    sc.fillStyle = gGrad(mx - stemBotW/2, stemTopY, mx + stemBotW/2, stemTopY);
+    sc.fill();
+    // Left shadow edge
+    sc.beginPath();
+    sc.moveTo(mx - stemTopW/2, stemTopY);
+    sc.bezierCurveTo(mx - stemTopW/2 - 2, stemTopY + 14, mx - stemBotW/2 - 2, stemBotY - 14, mx - stemBotW/2, stemBotY);
+    sc.strokeStyle = 'rgba(80,50,0,0.55)';
+    sc.lineWidth = 1.2;
+    sc.stroke();
+    // Right highlight edge
+    sc.beginPath();
+    sc.moveTo(mx + stemTopW/2, stemTopY);
+    sc.bezierCurveTo(mx + stemTopW/2 + 2, stemTopY + 14, mx + stemBotW/2 + 2, stemBotY - 14, mx + stemBotW/2, stemBotY);
+    sc.strokeStyle = 'rgba(255,240,140,0.7)';
+    sc.lineWidth = 1.2;
+    sc.stroke();
+    sc.restore();
+
+    // ── 3. CURVED MERIDIAN ARC ──
+    // Stand canvas is 130px tall, pulled up 55px into the globe.
+    // So the globe bottom (Y=150 on globe canvas) maps to Y = -55+150-150 = -55 ... 
+    // Simpler: globe center is 55px above top of stand canvas → arcCY = -(130 - 55) ... 
+    // Globe center is 55px above canvas top (because canvas is pulled up 55px, globe=300px, center at 150px, bottom at 300-55=245 wait let me think:
+    // globe canvas: center at pixel 150. stand canvas margin-top=-55 means stand canvas top = globe_bottom - 55 = 300 - 55 = 245 from globe top.
+    // So globe center relative to stand canvas top = 150 - 245 = -95
+    const arcCY    = -95;    // globe center Y in standCanvas coordinate space
+    const arcCX    = mx;
+    const arcRX    = 122;    // slightly wider than globe radius (128) to clear it
+    const arcRY    = 128;    // matches globe visual radius
+    const arcThick = 12;
+
+    sc.save();
+    // Draw arc: from bottom-left to bottom-right, going over the top (the full half-circle plus a bit)
+    // We only draw the portion visible in standCanvas (y >= 0)
+    // The arc is from ~200° to ~340° (bottom portion going off screen)
+    // Actually draw the visible part: lower left to upper and lower right
+    sc.beginPath();
+    // Full circle clipped to what's in canvas
+    sc.rect(0, 0, sw, sh);
+    // We'll draw the arc with clipping so only the lower part shows in the stand canvas
+    // And the upper part will overlap the globe canvas (handled separately)
+    
+    // Draw arc stroke
+    sc.beginPath();
+    sc.ellipse(arcCX, arcCY, arcRX, arcRY, 0, 0, Math.PI * 2);
+    sc.strokeStyle = gGradH(arcCX - arcRX, arcCY, arcCX + arcRX, arcCY);
+    sc.lineWidth = arcThick;
+    sc.stroke();
+
+    // Inner shadow on arc
+    sc.beginPath();
+    sc.ellipse(arcCX, arcCY, arcRX, arcRY, 0, 0, Math.PI * 2);
+    sc.strokeStyle = 'rgba(80,50,0,0.4)';
+    sc.lineWidth = arcThick * 0.35;
+    sc.stroke();
+
+    // Outer highlight
+    sc.beginPath();
+    sc.ellipse(arcCX, arcCY, arcRX + 1, arcRY + 1, 0, 0, Math.PI * 2);
+    sc.strokeStyle = 'rgba(255,248,160,0.4)';
+    sc.lineWidth = 2;
+    sc.stroke();
+
+    sc.restore();
+
+    // ── 4. KNOBS where arc meets the globe sides ──
+    [mx - arcRX * 0.72, mx + arcRX * 0.72].forEach((kx) => {
+      const dxNorm = (kx - arcCX) / arcRX;
+      if (Math.abs(dxNorm) > 1) return;
+      const ky = arcCY + arcRY * Math.sqrt(1 - dxNorm * dxNorm);
+      if (ky < -5 || ky > sh + 5) return;
+      const visKy = Math.max(2, ky);
+      const kg = sc.createRadialGradient(kx-3, visKy-3, 1, kx, visKy, 9);
+      kg.addColorStop(0, '#fffacc');
+      kg.addColorStop(0.4, '#f0c040');
+      kg.addColorStop(1, '#8b6000');
+      sc.beginPath(); sc.arc(kx, visKy, 9, 0, Math.PI*2);
+      sc.fillStyle = kg; sc.fill();
+      sc.strokeStyle = 'rgba(80,50,0,0.5)'; sc.lineWidth = 1; sc.stroke();
+    });
+
+    // Bottom glow
+    const glowG = sc.createRadialGradient(mx, sh - 4, 0, mx, sh - 4, 110);
+    glowG.addColorStop(0, 'rgba(240,192,64,0.22)');
+    glowG.addColorStop(1, 'transparent');
+    sc.beginPath();
+    sc.ellipse(mx, sh - 4, 110, 18, 0, 0, Math.PI*2);
+    sc.fillStyle = glowG; sc.fill();
+  }
+
+  // ── CONTINENT DATA ──
+  const landmasses = [
+    [[-168,72],[-140,72],[-120,76],[-100,78],[-80,72],[-65,60],[-60,47],[-66,44],[-70,41],[-75,35],[-80,25],[-85,20],[-88,15],[-88,20],[-105,22],[-118,32],[-124,38],[-124,49],[-130,55],[-140,60],[-152,60],[-164,64],[-168,72]],
+    [[-50,82],[-25,84],[0,82],[0,75],[-25,68],[-50,68],[-60,72],[-50,82]],
+    [[-80,12],[-68,12],[-60,6],[-50,0],[-40,-5],[-35,-10],[-35,-25],[-50,-35],[-65,-55],[-68,-55],[-73,-50],[-75,-40],[-80,-35],[-78,-5],[-80,12]],
+    [[-10,36],[0,36],[10,36],[20,36],[28,40],[30,46],[20,56],[10,58],[0,58],[-5,48],[-10,44],[-10,36]],
+    [[4,58],[10,58],[20,56],[28,70],[28,72],[20,72],[10,72],[4,60],[4,58]],
+    [[-18,16],[0,16],[18,18],[36,22],[42,12],[40,2],[38,-10],[36,-20],[26,-34],[18,-34],[14,-18],[0,-8],[-18,4],[-18,16]],
+    [[26,40],[40,36],[54,24],[60,22],[80,26],[100,20],[108,20],[110,22],[116,40],[130,45],[140,50],[140,70],[100,78],[80,74],[60,70],[40,68],[26,60],[26,40]],
+    [[60,22],[80,26],[90,22],[80,10],[72,22],[60,22]],
+    [[96,28],[100,20],[108,20],[110,10],[100,4],[94,6],[96,28]],
+    [[130,46],[135,40],[140,38],[142,44],[140,48],[135,46],[130,46]],
+    [[114,-22],[122,-16],[138,-12],[148,-18],[152,-24],[148,-38],[140,-38],[130,-34],[116,-30],[114,-22]],
+    [[172,-36],[178,-36],[178,-40],[174,-44],[172,-40],[172,-36]],
+    [[-75,-15],[-70,-55],[-60,-58],[-55,-35],[-50,-10],[-60,-5],[-75,-15]],
+  ];
+
+  function toXYZ(lon, lat, rotY) {
+    const lonR = (lon + rotY) * Math.PI / 180;
+    const latR = lat * Math.PI / 180;
+    return { x: Math.cos(latR)*Math.sin(lonR), y: -Math.sin(latR), z: Math.cos(latR)*Math.cos(lonR) };
+  }
+  function project(xyz) {
+    return { x: cx + xyz.x * R, y: cy + xyz.y * R, z: xyz.z };
+  }
+
+  let rotY = 0, spinSpeed = 0.22, isDragging = false, lastMouseX = 0, dragVel = 0;
+
+  function getX(e) { return e.touches ? e.touches[0].clientX : e.clientX; }
+
+  const wrap = document.getElementById('globeWrap');
+  canvas.addEventListener('mousedown', e => { isDragging=true; lastMouseX=getX(e); dragVel=0; wrap&&(wrap.style.cursor='grabbing'); e.preventDefault(); });
+  canvas.addEventListener('touchstart', e => { isDragging=true; lastMouseX=getX(e); dragVel=0; e.preventDefault(); }, {passive:false});
+  window.addEventListener('mousemove', e => { if(!isDragging)return; const dx=getX(e)-lastMouseX; rotY+=dx*0.42; dragVel=dx*0.42; lastMouseX=getX(e); });
+  window.addEventListener('touchmove', e => { if(!isDragging)return; const dx=getX(e)-lastMouseX; rotY+=dx*0.42; dragVel=dx*0.42; lastMouseX=getX(e); e.preventDefault(); }, {passive:false});
+  window.addEventListener('mouseup', () => { isDragging=false; wrap&&(wrap.style.cursor='grab'); });
+  window.addEventListener('touchend', () => { isDragging=false; });
+
+  function drawGlobe() {
+    ctx.clearRect(0, 0, W, H);
+
+    if (!isDragging) {
+      dragVel *= 0.93;
+      rotY += Math.abs(dragVel) < 0.05 ? spinSpeed : dragVel;
+    }
+
+    // Atmosphere glow
+    const atm = ctx.createRadialGradient(cx-25, cy-25, R*0.6, cx, cy, R*1.15);
+    atm.addColorStop(0, 'rgba(79,200,255,0)');
+    atm.addColorStop(0.75, 'rgba(79,200,255,0.06)');
+    atm.addColorStop(1, 'rgba(79,200,255,0.28)');
+    ctx.beginPath(); ctx.arc(cx, cy, R*1.13, 0, Math.PI*2);
+    ctx.fillStyle = atm; ctx.fill();
+
+    // Globe body
+    const gGrad = ctx.createRadialGradient(cx-38, cy-35, 10, cx, cy, R);
+    gGrad.addColorStop(0, '#4fc8ff');
+    gGrad.addColorStop(0.38, '#1a78d4');
+    gGrad.addColorStop(1, '#0a2d6e');
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
+    ctx.fillStyle = gGrad; ctx.fill();
+
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2); ctx.clip();
+
+    // Grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = 0.8;
+    for (let lat=-60; lat<=60; lat+=30) {
+      const latR=lat*Math.PI/180, ry=Math.sin(latR)*R, rx=Math.cos(latR)*R;
+      ctx.beginPath(); ctx.ellipse(cx, cy+ry, rx, rx*0.3, 0, 0, Math.PI*2); ctx.stroke();
+    }
+    for (let lon=0; lon<180; lon+=30) {
+      const lonR=(lon+rotY)*Math.PI/180;
+      ctx.beginPath(); ctx.ellipse(cx, cy, Math.abs(Math.cos(lonR)*R), R, 0, 0, Math.PI*2); ctx.stroke();
+    }
+
+    // Continents
+    ctx.fillStyle = 'rgba(40,170,70,0.9)';
+    ctx.strokeStyle = 'rgba(80,220,100,0.3)';
+    ctx.lineWidth = 0.7;
+    landmasses.forEach(poly => {
+      const pts = poly.map(([lo,la]) => project(toXYZ(lo, la, rotY)));
+      if (pts.filter(p=>p.z>0).length < 2) return;
+      ctx.beginPath();
+      let started = false;
+      for (const p of pts) {
+        if (p.z > -0.12) { started ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y); started=true; }
+      }
+      if (started) { ctx.closePath(); ctx.globalAlpha=0.9; ctx.fill(); ctx.stroke(); ctx.globalAlpha=1; }
+    });
+    ctx.restore();
+
+    // Shine
+    const shine = ctx.createRadialGradient(cx-38, cy-38, 5, cx-20, cy-20, R*0.85);
+    shine.addColorStop(0, 'rgba(255,255,255,0.32)');
+    shine.addColorStop(0.5, 'rgba(255,255,255,0.07)');
+    shine.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
+    ctx.fillStyle = shine; ctx.fill();
+
+    // Rings
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI*2);
+    ctx.strokeStyle = 'rgba(79,200,255,0.45)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, R+5, 0, Math.PI*2);
+    ctx.strokeStyle = 'rgba(79,200,255,0.16)'; ctx.lineWidth = 5; ctx.stroke();
+
+    requestAnimationFrame(drawGlobe);
+  }
+
+  drawGlobe();
+})();
+
+// ── STORY CARDS SCROLL ANIMATION ──
+(function() {
+  const page1 = document.getElementById('page1');
+  const cards = document.querySelectorAll('.story-card');
+  if (!cards.length) return;
+
+  function checkCards() {
+    const scrollY = page1.scrollTop;
+    const viewH = page1.clientHeight;
+    cards.forEach((card, i) => {
+      const rect = card.getBoundingClientRect();
+      // Use offsetTop relative to page1
+      const cardTop = card.offsetTop;
+      if (scrollY + viewH > cardTop + 80) {
+        setTimeout(() => card.classList.add('card-in'), i * 80);
+      }
+    });
+  }
+
+  page1.addEventListener('scroll', checkCards, { passive: true });
+  // Check after a short delay in case user is already on stories
+  setTimeout(checkCards, 300);
+})();
+
+
+
+
+// ========= GLOBE-QUEST-GO ALGORITHM (ported) =========
+
+// ===== Real-place city database with vibe / interest / budget tags =====
+// vibes: chill, party, exploration, luxury, nature, trendy, romantic, adventure, heritage, hidden
+// budget tier: 1=backpacker, 2=mid, 3=comfort, 4=luxury (typical daily ground cost)
+// fit: solo / partner / family / friends multiplier
+const cityDB = {
+  'Japan': [
+    {name:'Tokyo',safety:9.5,vibes:['party','exploration','trendy','luxury'],tier:3,fit:['solo','partner','friends','family'],desc:'Neon-lit megacity blending Shibuya nightlife, Michelin dining and tranquil shrines. Ultra-safe and endlessly explorable.'},
+    {name:'Kyoto',safety:9.5,vibes:['heritage','romantic','chill','exploration'],tier:3,fit:['solo','partner','family'],desc:'1000+ temples, geisha districts and bamboo groves. The cultural heart of Japan — peaceful and photogenic.'},
+    {name:'Osaka',safety:9.0,vibes:['party','exploration','trendy'],tier:2,fit:['solo','friends','partner'],desc:'Japan\'s street-food capital. Dotonbori neon, takoyaki stalls and a famously friendly nightlife scene.'},
+    {name:'Hokkaido (Sapporo & Niseko)',safety:9.0,vibes:['nature','adventure','luxury'],tier:3,fit:['partner','family','friends'],desc:'Powder-snow mountains, hot springs and seafood markets. World-class skiing in winter, lavender fields in summer.'},
+    {name:'Okinawa',safety:9.0,vibes:['nature','chill','romantic'],tier:3,fit:['partner','family'],desc:'Tropical Japan — coral reefs, white-sand beaches and a unique Ryukyuan culture far from mainland crowds.'},
+    {name:'Hakone',safety:9.5,vibes:['romantic','luxury','chill','nature'],tier:3,fit:['partner','solo'],desc:'Onsen ryokans with views of Mt Fuji. Quintessential slow Japan — perfect for a 2-3 day reset.'},
+    {name:'Nara',safety:9.5,vibes:['heritage','chill','exploration'],tier:2,fit:['family','partner','solo'],desc:'Ancient capital with free-roaming bow-ing deer and the giant bronze Buddha of Todai-ji.'},
+    {name:'Kanazawa',safety:9.5,vibes:['hidden','heritage','chill'],tier:2,fit:['solo','partner'],desc:'Quietly stunning samurai districts, gold-leaf workshops and Kenroku-en, one of Japan\'s top three gardens.'},
+  ],
+  'India': [
+    {name:'Udaipur',safety:8.5,vibes:['romantic','heritage','luxury'],tier:2,fit:['partner','family','solo'],desc:'The "City of Lakes" — palaces floating on water, sunset boat rides and Rajput-era charm.'},
+    {name:'Kerala (Alleppey & Munnar)',safety:8.7,vibes:['nature','chill','romantic'],tier:2,fit:['partner','family','solo'],desc:'Houseboat backwaters, tea-carpeted hills and Ayurvedic retreats. India\'s most laid-back state.'},
+    {name:'Jaipur',safety:8.0,vibes:['heritage','exploration','trendy'],tier:2,fit:['family','solo','partner'],desc:'The Pink City — Amber Fort, Hawa Mahal and bazaars overflowing with block-printed textiles.'},
+    {name:'Goa',safety:7.8,vibes:['party','chill','nature'],tier:2,fit:['friends','partner','solo'],desc:'Beach shacks, Portuguese churches and one of Asia\'s biggest party scenes (North Goa) or quiet jungle yoga (South).'},
+    {name:'Rishikesh',safety:8.4,vibes:['adventure','nature','hidden'],tier:1,fit:['solo','friends'],desc:'Yoga capital of the world on the Ganges. White-water rafting, ashrams and Beatles-era backpacker soul.'},
+    {name:'Leh-Ladakh',safety:8.6,vibes:['adventure','nature','hidden'],tier:2,fit:['solo','friends','partner'],desc:'High-altitude desert with monasteries, turquoise lakes and the world\'s highest motorable roads.'},
+    {name:'Varanasi',safety:7.5,vibes:['heritage','exploration','hidden'],tier:1,fit:['solo'],desc:'India\'s spiritual core — sunrise boat rides past burning ghats and labyrinthine alleys older than memory.'},
+    {name:'Mumbai',safety:7.5,vibes:['party','trendy','exploration'],tier:2,fit:['solo','friends','partner'],desc:'Bollywood, colonial-era architecture and a 24/7 buzz. Best big-city nightlife in India.'},
+    {name:'Bangalore',safety:8.2,vibes:['trendy','party','exploration'],tier:2,fit:['solo','friends'],desc:'Garden city turned tech hub. Craft-beer pubs, breezy weather and the gateway to Coorg & Hampi.'},
+  ],
+  'Thailand': [
+    {name:'Chiang Mai',safety:9.0,vibes:['chill','heritage','nature','hidden'],tier:1,fit:['solo','partner','family','friends'],desc:'Mountain-ringed old city of 300 temples, night bazaars and elephant sanctuaries. A digital-nomad favourite.'},
+    {name:'Bangkok',safety:8.0,vibes:['party','exploration','trendy'],tier:1,fit:['solo','friends','partner'],desc:'Sky bars, street food, golden temples and Khao San. Chaotic, addictive, world-class nightlife.'},
+    {name:'Phuket',safety:8.2,vibes:['party','luxury','chill'],tier:3,fit:['friends','partner','family'],desc:'Thailand\'s biggest island — Patong\'s Bangla Road parties on one coast, secluded resorts on the other.'},
+    {name:'Krabi & Railay',safety:8.8,vibes:['nature','adventure','romantic'],tier:2,fit:['partner','friends','family'],desc:'Towering limestone karsts over emerald sea. World-class rock climbing and longtail boat island-hopping.'},
+    {name:'Koh Samui',safety:8.5,vibes:['luxury','romantic','chill'],tier:3,fit:['partner','family'],desc:'Palm-fringed bays, full-moon parties next door on Koh Phangan and a strong wellness-resort scene.'},
+    {name:'Pai',safety:9.0,vibes:['hidden','chill','nature'],tier:1,fit:['solo','partner'],desc:'Sleepy mountain valley north of Chiang Mai — hot springs, hippie cafés and zero rush.'},
+    {name:'Ayutthaya',safety:9.0,vibes:['heritage','hidden'],tier:1,fit:['solo','family','partner'],desc:'UNESCO ruins of Siam\'s former capital. A perfect day-trip-able time machine 80km from Bangkok.'},
+  ],
+  'Italy': [
+    {name:'Rome',safety:8.5,vibes:['heritage','exploration','romantic'],tier:3,fit:['solo','partner','family','friends'],desc:'2,700-year-old open-air museum — Colosseum, Vatican, and the world\'s best gelato around every corner.'},
+    {name:'Florence',safety:8.7,vibes:['heritage','romantic','luxury'],tier:3,fit:['partner','solo','family'],desc:'Renaissance capital. Uffizi, Duomo and Tuscan day-trips to Chianti vineyards.'},
+    {name:'Venice',safety:8.8,vibes:['romantic','heritage','luxury'],tier:4,fit:['partner','solo'],desc:'A city built on water. Lose yourself in backstreets, then drift through canals at sunset.'},
+    {name:'Amalfi Coast',safety:8.9,vibes:['luxury','romantic','chill'],tier:4,fit:['partner','family'],desc:'Pastel cliff villages over the Tyrrhenian. Positano sunsets, lemon groves and seafood pasta worth the price tag.'},
+    {name:'Cinque Terre',safety:9.0,vibes:['nature','romantic','hidden'],tier:3,fit:['partner','solo','friends'],desc:'Five technicolor fishing villages strung along a hiking trail above the sea.'},
+    {name:'Milan',safety:8.4,vibes:['trendy','luxury','party'],tier:3,fit:['solo','friends','partner'],desc:'Italy\'s fashion & finance capital. Aperitivo culture, design districts and the Last Supper.'},
+    {name:'Sicily (Palermo & Taormina)',safety:8.0,vibes:['hidden','heritage','nature'],tier:2,fit:['family','partner','friends'],desc:'Volcanoes, Greek temples, Arab-Norman cathedrals and Italy\'s most layered cuisine.'},
+    {name:'Lake Como',safety:9.2,vibes:['luxury','romantic','nature'],tier:4,fit:['partner','family'],desc:'Mountain-rimmed lake of villas and hydrofoils. George Clooney\'s neighborhood for a reason.'},
+  ],
+  'France': [
+    {name:'Paris',safety:8.0,vibes:['romantic','luxury','heritage','trendy'],tier:3,fit:['solo','partner','family','friends'],desc:'The eternal city of light — Louvre, Montmartre, Seine cruises and the world\'s densest café culture.'},
+    {name:'Nice & French Riviera',safety:8.6,vibes:['luxury','chill','romantic','party'],tier:4,fit:['partner','friends','family'],desc:'Pebble beaches, palm-lined Promenade des Anglais and easy day-trips to Cannes, Monaco and Èze.'},
+    {name:'Provence (Aix & Avignon)',safety:9.0,vibes:['romantic','nature','heritage','chill'],tier:3,fit:['partner','family'],desc:'Lavender fields, hilltop villages and rosé under plane-trees. Slow France at its best.'},
+    {name:'Lyon',safety:8.7,vibes:['heritage','exploration','hidden'],tier:2,fit:['solo','partner','family'],desc:'France\'s gastronomic capital. Bouchons, Renaissance traboules and fewer tourists than Paris.'},
+    {name:'Chamonix',safety:9.2,vibes:['adventure','nature','luxury'],tier:3,fit:['friends','partner','family'],desc:'Mont Blanc at your doorstep. Skiing, alpine hiking and one of Europe\'s great mountain towns.'},
+    {name:'Bordeaux',safety:8.8,vibes:['luxury','heritage','romantic'],tier:3,fit:['partner','solo'],desc:'World wine capital — UNESCO old town, vineyard châteaux 30 min away.'},
+    {name:'Étretat & Normandy',safety:9.3,vibes:['hidden','nature','heritage'],tier:2,fit:['family','partner'],desc:'Chalk-cliff arches, D-Day beaches and crêpes. Rugged, less-trodden coast.'},
+  ],
+  'Spain': [
+    {name:'Barcelona',safety:7.8,vibes:['party','trendy','exploration','heritage'],tier:3,fit:['solo','friends','partner'],desc:'Gaudí dreamscapes, beach + city life and tapas crawls until dawn. Watch pickpockets in tourist zones.'},
+    {name:'Madrid',safety:8.4,vibes:['party','heritage','exploration','trendy'],tier:2,fit:['solo','friends','partner','family'],desc:'Spain\'s capital of late dinners and rooftop bars. Prado, Reina Sofía and the world\'s oldest restaurant.'},
+    {name:'Seville',safety:8.5,vibes:['heritage','romantic','party'],tier:2,fit:['partner','friends','family'],desc:'Flamenco birthplace, Mudéjar palaces and orange-tree-scented plazas.'},
+    {name:'Granada',safety:8.6,vibes:['heritage','hidden','exploration'],tier:1,fit:['solo','partner','friends'],desc:'The Alhambra, free tapas with every drink and Sierra Nevada peaks an hour away.'},
+    {name:'San Sebastián',safety:9.1,vibes:['luxury','chill','romantic'],tier:3,fit:['partner','friends','family'],desc:'Basque crescent beach + arguably the world\'s best pintxos bar scene.'},
+    {name:'Ibiza',safety:8.0,vibes:['party','luxury','trendy'],tier:4,fit:['friends','partner'],desc:'Global clubbing capital and surprisingly serene north-coast coves and yoga retreats.'},
+    {name:'Mallorca',safety:8.9,vibes:['nature','luxury','chill','romantic'],tier:3,fit:['family','partner','friends'],desc:'Tramuntana mountains, hidden coves and Palma\'s gothic old town.'},
+  ],
+  'Greece': [
+    {name:'Santorini',safety:9.0,vibes:['romantic','luxury','trendy'],tier:4,fit:['partner','solo'],desc:'Whitewashed cliff villages over a flooded caldera. Famous sunsets and infinity-pool resorts.'},
+    {name:'Athens',safety:8.0,vibes:['heritage','exploration','party'],tier:2,fit:['solo','friends','partner','family'],desc:'Acropolis, gritty-cool neighborhoods like Exarcheia and souvlaki under the Parthenon.'},
+    {name:'Mykonos',safety:8.5,vibes:['party','luxury','trendy'],tier:4,fit:['friends','partner'],desc:'Cycladic island synonymous with beach clubs, super-yachts and cosmopolitan nightlife.'},
+    {name:'Crete',safety:8.7,vibes:['nature','heritage','adventure','chill'],tier:2,fit:['family','partner','friends'],desc:'Greece\'s biggest island — Minoan ruins, Samaria Gorge and pink-sand Elafonissi.'},
+    {name:'Naxos',safety:9.2,vibes:['hidden','chill','nature'],tier:2,fit:['family','partner','solo'],desc:'The Cyclades without the crowds — long beaches, mountain villages and proper Greek tavernas.'},
+    {name:'Meteora',safety:9.4,vibes:['heritage','adventure','hidden','nature'],tier:2,fit:['solo','partner','family'],desc:'Monasteries on top of impossible rock pillars. Best at sunrise.'},
+  ],
+  'Indonesia': [
+    {name:'Bali (Ubud)',safety:8.4,vibes:['chill','romantic','nature','luxury'],tier:2,fit:['partner','solo','family'],desc:'Jungle yoga shalas, rice terraces and cliff-side spas. The wellness heart of Bali.'},
+    {name:'Bali (Canggu & Seminyak)',safety:8.0,vibes:['party','trendy','chill'],tier:2,fit:['friends','partner','solo'],desc:'Surf breaks, beach clubs and a famously photogenic café scene.'},
+    {name:'Bali (Uluwatu)',safety:8.5,vibes:['romantic','luxury','nature'],tier:3,fit:['partner'],desc:'Limestone cliffs, world-class surf and sunset kecak fire dances.'},
+    {name:'Nusa Penida',safety:8.2,vibes:['adventure','nature','hidden'],tier:1,fit:['friends','solo','partner'],desc:'Rugged island off Bali — Kelingking Beach, manta rays and very rough roads.'},
+    {name:'Yogyakarta',safety:8.3,vibes:['heritage','exploration','hidden'],tier:1,fit:['solo','family','partner'],desc:'Sunrise at Borobudur, sultan\'s palace and Java\'s best batik & street food.'},
+    {name:'Komodo & Flores',safety:8.6,vibes:['adventure','nature','luxury','hidden'],tier:3,fit:['friends','partner'],desc:'Liveaboard boat trips to dragons, pink beaches and Padar viewpoints.'},
+    {name:'Lombok & Gili Islands',safety:8.4,vibes:['chill','party','nature'],tier:2,fit:['friends','partner','solo'],desc:'Mt Rinjani treks plus three car-free islands ranging from party (Trawangan) to honeymoon (Meno).'},
+  ],
+  'Iceland': [
+    {name:'Reykjavik',safety:9.6,vibes:['exploration','party','trendy'],tier:4,fit:['solo','friends','partner','family'],desc:'World\'s northernmost capital — colourful tin houses, wild bars and a base for every Iceland adventure.'},
+    {name:'Golden Circle',safety:9.7,vibes:['nature','adventure','exploration'],tier:3,fit:['family','partner','solo','friends'],desc:'Geysir, Gullfoss waterfall and Þingvellir tectonic-rift national park in one easy loop.'},
+    {name:'South Coast (Vík)',safety:9.6,vibes:['nature','adventure','romantic'],tier:3,fit:['partner','family','friends'],desc:'Black-sand beaches, glacier lagoons and the sea-stacks of Reynisfjara.'},
+    {name:'Westfjords',safety:9.7,vibes:['hidden','nature','adventure'],tier:3,fit:['solo','partner'],desc:'Iceland\'s least-visited region — fjords, puffin cliffs and the thunderous Dynjandi waterfall.'},
+    {name:'Akureyri & North',safety:9.6,vibes:['nature','chill','adventure'],tier:3,fit:['family','partner','friends'],desc:'Whale-watching capital, geothermal baths and quieter alternative to the south.'},
+    {name:'Highlands (Landmannalaugar)',safety:9.3,vibes:['adventure','nature','hidden'],tier:3,fit:['friends','partner','solo'],desc:'Rhyolite mountains in summer-only access — one of Earth\'s strangest hiking landscapes.'},
+  ],
+  'Mexico': [
+    {name:'Mexico City',safety:7.5,vibes:['exploration','party','heritage','trendy'],tier:2,fit:['solo','friends','partner'],desc:'CDMX — Aztec ruins, Frida\'s blue house, taquerías and one of the world\'s liveliest food scenes.'},
+    {name:'Tulum',safety:8.0,vibes:['luxury','trendy','romantic','chill'],tier:3,fit:['partner','friends'],desc:'Jungle-meets-Caribbean boho-chic — cenotes, beach-club yoga and Mayan cliff-side ruins.'},
+    {name:'Oaxaca',safety:8.5,vibes:['heritage','hidden','exploration'],tier:1,fit:['solo','partner','family','friends'],desc:'Mole, mezcal and Zapotec textiles. Mexico\'s deepest cultural pocket.'},
+    {name:'Playa del Carmen & Cozumel',safety:8.0,vibes:['party','chill','nature'],tier:3,fit:['friends','family','partner'],desc:'Riviera Maya beach base — diving on the world\'s second-largest reef.'},
+    {name:'Sayulita',safety:8.4,vibes:['chill','party','nature'],tier:2,fit:['friends','partner','solo'],desc:'Pacific surf town with bohemian flair, taco stands and sunset bonfires.'},
+    {name:'San Miguel de Allende',safety:8.9,vibes:['romantic','heritage','luxury','hidden'],tier:3,fit:['partner','solo'],desc:'Pink stone cathedral, cobblestone streets and a thriving artist colony.'},
+    {name:'Cancún',safety:8.0,vibes:['party','luxury','chill'],tier:3,fit:['friends','family','partner'],desc:'All-inclusive resorts on a long white-sand strip plus easy access to Isla Mujeres.'},
+  ],
+  'Morocco': [
+    {name:'Marrakech',safety:7.8,vibes:['heritage','exploration','luxury','party'],tier:2,fit:['solo','partner','friends','family'],desc:'Riads, snake charmers and the legendary Jemaa el-Fnaa square. A sensory overload.'},
+    {name:'Fes',safety:8.0,vibes:['heritage','hidden','exploration'],tier:1,fit:['solo','partner'],desc:'World\'s largest car-free medina — leather tanneries, qaraouine library and 9th-century lanes.'},
+    {name:'Chefchaouen',safety:8.6,vibes:['romantic','hidden','chill'],tier:1,fit:['partner','solo','friends'],desc:'The blue pearl of the Rif mountains. Every wall, door and stair is painted indigo.'},
+    {name:'Sahara (Merzouga)',safety:8.4,vibes:['adventure','romantic','hidden'],tier:2,fit:['partner','friends','family'],desc:'Camel trek to a dune camp under stars at Erg Chebbi.'},
+    {name:'Essaouira',safety:8.8,vibes:['chill','nature','hidden'],tier:1,fit:['partner','family','friends'],desc:'Windswept Atlantic port — kitesurfing, fresh sardines and a fortified medina by the sea.'},
+    {name:'Casablanca',safety:7.6,vibes:['exploration','trendy'],tier:2,fit:['solo','partner'],desc:'Modern Morocco — the giant Hassan II mosque sits half over the ocean.'},
+  ],
+  'Vietnam': [
+    {name:'Hanoi',safety:8.5,vibes:['exploration','heritage','party'],tier:1,fit:['solo','friends','partner','family'],desc:'Old Quarter chaos, beer hoi at €0.30 a glass and the best pho on Earth.'},
+    {name:'Ha Long Bay',safety:9.0,vibes:['nature','romantic','luxury'],tier:2,fit:['partner','family','friends'],desc:'2,000 limestone karsts in jade water. Best done on an overnight cruise.'},
+    {name:'Hoi An',safety:9.2,vibes:['romantic','heritage','chill'],tier:1,fit:['partner','family','solo'],desc:'Lantern-lit ancient town, tailor shops and a 5-min cycle to An Bang beach.'},
+    {name:'Sapa',safety:8.7,vibes:['adventure','nature','hidden'],tier:1,fit:['friends','solo','partner'],desc:'Terraced rice valleys and homestays with H\'mong & Dao hill-tribes.'},
+    {name:'Ho Chi Minh City',safety:8.0,vibes:['party','exploration','trendy'],tier:1,fit:['solo','friends'],desc:'Saigon — rooftop bars, war museums and motorbike-dodging street food crawls.'},
+    {name:'Phu Quoc',safety:8.6,vibes:['chill','luxury','romantic'],tier:2,fit:['partner','family'],desc:'Vietnam\'s Phuket — palm beaches, night markets and increasingly upscale resorts.'},
+    {name:'Da Nang',safety:9.0,vibes:['chill','trendy','nature'],tier:1,fit:['family','partner','friends'],desc:'My Khe beach plus the famous Golden Bridge held by giant stone hands.'},
+  ],
+  'Portugal': [
+    {name:'Lisbon',safety:8.8,vibes:['party','trendy','heritage','exploration'],tier:2,fit:['solo','friends','partner','family'],desc:'Tiled hills, pastel de nata and Bairro Alto bar nights. Europe\'s budget-friendly cool capital.'},
+    {name:'Porto',safety:9.0,vibes:['heritage','romantic','chill'],tier:2,fit:['partner','family','solo'],desc:'Port-wine cellars over the Douro, azulejo-clad churches and great seafood.'},
+    {name:'Sintra',safety:9.2,vibes:['romantic','heritage','hidden'],tier:2,fit:['partner','family'],desc:'Fairy-tale palaces in misty hills — the technicolor Pena and Moorish castle.'},
+    {name:'Algarve (Lagos)',safety:9.0,vibes:['party','nature','chill'],tier:2,fit:['friends','partner','family'],desc:'Golden cliffs, sea caves at Benagil and the youngest beach scene in Portugal.'},
+    {name:'Madeira',safety:9.4,vibes:['nature','adventure','chill','hidden'],tier:2,fit:['family','partner','solo'],desc:'Subtropical Atlantic island — levada hikes, vertical cliffs and year-round 22°C.'},
+    {name:'Azores (São Miguel)',safety:9.5,vibes:['nature','adventure','hidden','romantic'],tier:2,fit:['partner','family','solo'],desc:'Volcanic crater lakes, hot springs and whale-watching in mid-Atlantic.'},
+  ],
+  'Peru': [
+    {name:'Cusco',safety:8.0,vibes:['heritage','adventure','exploration'],tier:2,fit:['solo','friends','partner','family'],desc:'Inca capital at 3,400m — gateway to Machu Picchu and the Sacred Valley.'},
+    {name:'Machu Picchu & Sacred Valley',safety:9.0,vibes:['heritage','adventure','nature'],tier:3,fit:['family','partner','friends','solo'],desc:'The iconic cloud-forest citadel plus terraced Inca ruins at Pisac and Ollantaytambo.'},
+    {name:'Lima',safety:7.5,vibes:['exploration','luxury','trendy'],tier:2,fit:['solo','partner','family'],desc:'Pacific-cliff capital with two of the world\'s 50-best restaurants and an excellent ceviche scene.'},
+    {name:'Arequipa & Colca Canyon',safety:8.6,vibes:['hidden','nature','heritage'],tier:2,fit:['solo','partner','friends'],desc:'White-volcanic-stone city + the world\'s second-deepest canyon and condor flights.'},
+    {name:'Lake Titicaca (Puno)',safety:8.5,vibes:['hidden','heritage','nature'],tier:1,fit:['family','partner','solo'],desc:'Floating Uros reed islands and homestays on Taquile and Amantaní.'},
+    {name:'Huacachina & Paracas',safety:8.4,vibes:['adventure','nature','hidden'],tier:1,fit:['friends','solo','partner'],desc:'Sandboard a desert oasis, then boat to penguin-and-sea-lion-packed Ballestas Islands.'},
+  ],
+  'Turkey': [
+    {name:'Istanbul',safety:7.8,vibes:['heritage','exploration','party','trendy'],tier:2,fit:['solo','partner','friends','family'],desc:'Where Europe meets Asia — Hagia Sophia, Grand Bazaar and rooftop bars over the Bosphorus.'},
+    {name:'Cappadocia',safety:9.0,vibes:['romantic','adventure','luxury','hidden'],tier:2,fit:['partner','family','friends'],desc:'Hot-air balloons at sunrise over fairy-chimney rock formations and cave hotels.'},
+    {name:'Antalya & Lycian Coast',safety:8.6,vibes:['chill','nature','luxury'],tier:2,fit:['family','partner','friends'],desc:'Turquoise coast — Roman ruins next to all-inclusive resorts; Ölüdeniz paragliding nearby.'},
+    {name:'Pamukkale',safety:9.0,vibes:['hidden','nature','heritage'],tier:1,fit:['family','partner','solo'],desc:'Dazzling white travertine terraces above the ancient Greco-Roman city of Hierapolis.'},
+    {name:'Bodrum',safety:8.4,vibes:['party','luxury','chill'],tier:3,fit:['friends','partner','family'],desc:'Aegean party-and-yacht peninsula — Turkey\'s answer to Mykonos.'},
+    {name:'Ephesus & Selçuk',safety:8.8,vibes:['heritage','exploration','hidden'],tier:1,fit:['family','solo','partner'],desc:'One of the best-preserved classical cities anywhere; Library of Celsus is a showstopper.'},
+  ],
+  'Egypt': [
+    {name:'Cairo & Giza',safety:7.5,vibes:['heritage','exploration'],tier:2,fit:['family','solo','partner','friends'],desc:'Pyramids, Sphinx and the new Grand Egyptian Museum. Stay alert in crowds.'},
+    {name:'Luxor',safety:8.0,vibes:['heritage','hidden','exploration'],tier:2,fit:['family','partner','solo'],desc:'World\'s greatest open-air museum — Karnak, Valley of the Kings and balloon rides at dawn.'},
+    {name:'Aswan',safety:8.4,vibes:['romantic','heritage','hidden'],tier:2,fit:['partner','family','solo'],desc:'Felucca sailboats on the Nile, Nubian villages and Philae Temple.'},
+    {name:'Sharm el-Sheikh',safety:8.5,vibes:['luxury','chill','adventure'],tier:3,fit:['family','partner','friends'],desc:'World-class Red Sea diving on coral walls and shipwrecks of Ras Mohammed.'},
+    {name:'Dahab',safety:8.6,vibes:['hidden','chill','adventure'],tier:1,fit:['solo','friends','partner'],desc:'Sleepy Bedouin town. Free-diving the Blue Hole and beachside Bedouin cushions.'},
+    {name:'Nile cruise (Luxor → Aswan)',safety:8.7,vibes:['luxury','romantic','heritage'],tier:3,fit:['family','partner'],desc:'3-7 night sail past Edfu, Kom Ombo and palm villages — classic Egypt.'},
+  ],
+  'Australia': [
+    {name:'Sydney',safety:9.0,vibes:['exploration','trendy','party','luxury'],tier:4,fit:['solo','friends','partner','family'],desc:'Opera House harbour, Bondi Beach and one of the prettiest city skylines on Earth.'},
+    {name:'Melbourne',safety:9.0,vibes:['trendy','party','exploration'],tier:3,fit:['solo','friends','partner','family'],desc:'Laneway coffee, street art, four seasons in a day and Australia\'s arts capital.'},
+    {name:'Great Barrier Reef (Cairns)',safety:9.1,vibes:['adventure','nature','luxury'],tier:4,fit:['family','partner','friends'],desc:'Liveaboard dives on the world\'s largest reef + access to Daintree rainforest.'},
+    {name:'Uluru & Red Centre',safety:9.2,vibes:['hidden','nature','heritage'],tier:3,fit:['family','partner','solo'],desc:'Sacred sandstone monolith glowing red at dawn in the heart of the outback.'},
+    {name:'Tasmania',safety:9.4,vibes:['nature','adventure','hidden'],tier:3,fit:['partner','family','friends'],desc:'Cradle Mountain, MONA museum and some of the cleanest air on the planet.'},
+    {name:'Gold Coast',safety:8.8,vibes:['party','chill','nature'],tier:3,fit:['friends','family','partner'],desc:'Surfers Paradise high-rises, theme parks and 70km of golden beach.'},
+    {name:'Whitsundays',safety:9.3,vibes:['romantic','luxury','nature'],tier:4,fit:['partner','family','friends'],desc:'74 islands fringing the reef — sail to silica-sand Whitehaven Beach.'},
+  ],
+  'Brazil': [
+    {name:'Rio de Janeiro',safety:7.0,vibes:['party','exploration','nature'],tier:2,fit:['solo','friends','partner'],desc:'Christ the Redeemer, Copacabana and Carnival energy year-round. Take normal big-city precautions.'},
+    {name:'Salvador (Bahia)',safety:7.2,vibes:['heritage','party','hidden'],tier:1,fit:['solo','friends','partner'],desc:'Afro-Brazilian capital — capoeira, candomblé and the candy-coloured Pelourinho.'},
+    {name:'Iguazu Falls',safety:8.5,vibes:['nature','adventure','romantic'],tier:2,fit:['family','partner','friends'],desc:'275 cascades thundering over a 3km-wide horseshoe — best at golden hour.'},
+    {name:'Florianópolis',safety:8.5,vibes:['chill','nature','party'],tier:2,fit:['friends','partner','family'],desc:'Surf-island capital with 42 beaches, lagoon kitesurfing and a strong nightlife scene.'},
+    {name:'Amazon (Manaus)',safety:8.0,vibes:['adventure','nature','hidden'],tier:2,fit:['partner','solo','friends'],desc:'Jungle-lodge stays, river dolphin spotting and the meeting of black and brown waters.'},
+    {name:'Fernando de Noronha',safety:9.4,vibes:['luxury','nature','romantic','hidden'],tier:4,fit:['partner','family'],desc:'Pristine UNESCO archipelago — 21 beaches and turtle/spinner-dolphin snorkelling.'},
+    {name:'Paraty',safety:8.6,vibes:['romantic','heritage','hidden','nature'],tier:2,fit:['partner','family'],desc:'Whitewashed colonial port, mangrove schooner trips and waterfall hikes inland.'},
+  ],
+  'Kenya': [
+    {name:'Maasai Mara',safety:8.5,vibes:['adventure','nature','luxury'],tier:4,fit:['family','partner','friends'],desc:'The Great Migration of 1.5M wildebeest crossing the Mara River — Africa\'s ultimate safari.'},
+    {name:'Amboseli',safety:8.7,vibes:['nature','luxury','romantic'],tier:3,fit:['family','partner'],desc:'Massive elephant herds in front of snow-capped Kilimanjaro across the border.'},
+    {name:'Diani Beach',safety:8.4,vibes:['chill','luxury','romantic'],tier:3,fit:['partner','family','friends'],desc:'White-sand Indian Ocean stretch with kitesurfing, dhow cruises and colobus monkeys.'},
+    {name:'Nairobi',safety:7.0,vibes:['exploration','trendy','hidden'],tier:2,fit:['solo','partner'],desc:'Giraffe Centre, elephant orphanage and the only city park where you can see lions on a day-trip.'},
+    {name:'Lake Naivasha & Hells Gate',safety:8.6,vibes:['adventure','nature','hidden'],tier:2,fit:['friends','partner','family'],desc:'Bike past zebras and giraffes through a Rift Valley national park — no Big-Five fences.'},
+    {name:'Lamu',safety:8.0,vibes:['hidden','romantic','heritage','chill'],tier:2,fit:['partner','solo'],desc:'Car-free Swahili island of dhows, donkeys and 14th-century coral-stone houses.'},
+  ],
+  'Norway': [
+    {name:'Oslo',safety:9.4,vibes:['trendy','exploration','luxury'],tier:4,fit:['solo','partner','family','friends'],desc:'Fjord-side capital — Munch museum, Vigeland sculpture park and the new Opera House you can walk on.'},
+    {name:'Bergen & the Fjords',safety:9.5,vibes:['nature','romantic','adventure'],tier:4,fit:['partner','family','friends'],desc:'UNESCO Bryggen wharf and the gateway to Sognefjord and Nærøyfjord.'},
+    {name:'Lofoten Islands',safety:9.6,vibes:['nature','adventure','hidden','romantic'],tier:3,fit:['partner','friends','solo'],desc:'Granite peaks rising from Arctic sea — surf, hike and chase northern lights from a red rorbu cabin.'},
+    {name:'Tromsø',safety:9.5,vibes:['adventure','nature','romantic'],tier:3,fit:['partner','friends','family'],desc:'Capital of the Arctic — best aurora odds Sept-March, plus midnight sun in summer.'},
+    {name:'Geirangerfjord',safety:9.6,vibes:['nature','romantic','luxury'],tier:4,fit:['partner','family'],desc:'UNESCO fjord of the Seven Sisters waterfall. Cruise it or kayak it.'},
+    {name:'Svalbard',safety:9.0,vibes:['adventure','hidden','nature'],tier:4,fit:['friends','partner','solo'],desc:'78°N — polar bears outnumber people. Snowmobiling, glacier caves and the Arctic seed vault.'},
+  ],
+  'United States': [
+    {name:'New York City',safety:8.0,vibes:['exploration','trendy','party','luxury'],tier:3,fit:['solo','friends','partner','family'],desc:'The city that never sleeps — iconic skyline, Times Square, Central Park, world-class museums and every cuisine on earth.'},
+    {name:'Los Angeles',safety:7.5,vibes:['trendy','party','chill','luxury'],tier:3,fit:['friends','partner','solo'],desc:'Hollywood glamour, Venice Beach vibes, canyon hikes and a food scene that ranges from taco trucks to Michelin stars.'},
+    {name:'San Francisco',safety:7.8,vibes:['exploration','trendy','nature'],tier:3,fit:['solo','partner','friends'],desc:'Golden Gate Bridge, cable cars, foggy hills and tech culture. Day-trips to Napa Valley and Muir Woods.'},
+    {name:'Grand Canyon',safety:9.0,vibes:['nature','adventure','hidden'],tier:2,fit:['family','partner','friends','solo'],desc:'One of Earth\'s greatest natural wonders — rim walks, sunrise viewpoints and mule rides into the mile-deep gorge.'},
+    {name:'Las Vegas',safety:7.8,vibes:['party','luxury','trendy'],tier:3,fit:['friends','partner'],desc:'The Entertainment Capital of the World — casinos, world-class shows, rooftop pools and 24-hour neon excess.'},
+    {name:'Miami',safety:7.5,vibes:['party','chill','luxury','trendy'],tier:3,fit:['friends','partner','solo'],desc:'South Beach art deco, turquoise Atlantic, Cuban food in Little Havana and one of the world\'s hottest nightlife scenes.'},
+  ],
+  'United Kingdom': [
+    {name:'London',safety:8.2,vibes:['exploration','heritage','trendy','luxury'],tier:3,fit:['solo','partner','family','friends'],desc:'Big Ben, Buckingham Palace, the Tate Modern and the world\'s most diverse food scene — endlessly explorable.'},
+    {name:'Edinburgh',safety:9.0,vibes:['heritage','exploration','romantic'],tier:2,fit:['partner','solo','family'],desc:'A dramatic castle on volcanic rock, a medieval Old Town, whisky distilleries and the world\'s biggest arts festival.'},
+    {name:'Manchester',safety:8.0,vibes:['party','trendy','exploration'],tier:2,fit:['friends','solo','partner'],desc:'Football temples, the birthplace of the Industrial Revolution, a thriving music scene and the Northern Quarter\'s cool bars.'},
+    {name:'Oxford',safety:9.0,vibes:['heritage','chill','exploration'],tier:2,fit:['partner','solo','family'],desc:'Dreaming spires, 900-year-old colleges, the Bodleian Library and punting on the Cherwell on a lazy afternoon.'},
+    {name:'Lake District',safety:9.5,vibes:['nature','romantic','chill','adventure'],tier:2,fit:['partner','family','solo'],desc:'England\'s most beloved national park — shimmering lakes, fells, Wordsworth\'s cottage and quintessential village pubs.'},
+    {name:'Birmingham',safety:7.8,vibes:['exploration','trendy','heritage'],tier:2,fit:['friends','family','solo'],desc:'The UK\'s second city — more canals than Venice, the Jewellery Quarter, Balti Triangle curries and the Bullring.'},
+  ],
+  '_default': [
+    {name:'Capital City',safety:8.0,vibes:['exploration','trendy','party'],tier:2,fit:['solo','friends','partner','family'],desc:'The cultural and political heart — best museums, restaurants and nightlife.'},
+    {name:'Old Town / Historic Quarter',safety:8.5,vibes:['heritage','romantic','chill'],tier:2,fit:['partner','family','solo'],desc:'Walkable cobblestone core packed with history and easy day-walks.'},
+    {name:'Coastal Resort',safety:8.8,vibes:['chill','luxury','romantic'],tier:3,fit:['partner','family','friends'],desc:'Beachfront base with strong tourism infrastructure — perfect for switching off.'},
+    {name:'Mountain Retreat',safety:9.0,vibes:['nature','adventure','hidden'],tier:2,fit:['solo','partner','friends'],desc:'Quiet highland region for hiking, viewpoints and slow travel.'},
+    {name:'Cultural Hub',safety:8.3,vibes:['heritage','exploration','trendy'],tier:2,fit:['solo','partner','friends','family'],desc:'Lively district built around museums, music and nightlife.'},
+    {name:'Hidden Gem Village',safety:8.7,vibes:['hidden','chill','romantic'],tier:1,fit:['partner','solo'],desc:'Off-the-beaten-track local life with friendly hosts and authentic food.'},
+  ],
+  'China': [
+    {name:'Beijing',safety:8.8,vibes:['heritage','exploration','luxury'],tier:3,fit:['family','partner','solo','friends'],desc:'The Great Wall, Forbidden City and Temple of Heaven — China\'s imperial heart, blending ancient grandeur with a modern buzz.'},
+    {name:'Shanghai',safety:9.0,vibes:['trendy','party','luxury','exploration'],tier:3,fit:['solo','friends','partner','family'],desc:'A dazzling modern skyline, world-class shopping on Nanjing Road and a vibrant nightlife scene along the Bund.'},
+    {name:'Xi\'an',safety:8.7,vibes:['heritage','exploration','hidden'],tier:2,fit:['family','partner','solo'],desc:'Home of the Terracotta Army and ancient city walls. One of China\'s greatest historical treasures.'},
+    {name:'Zhangjiajie National Forest Park',safety:9.0,vibes:['nature','adventure','hidden'],tier:2,fit:['friends','partner','family','solo'],desc:'The iconic Avatar mountains — towering sandstone pillars rising through cloud, accessible via glass-bottomed sky bridge.'},
+    {name:'Guilin',safety:9.0,vibes:['nature','romantic','chill'],tier:2,fit:['partner','family','solo'],desc:'Karst limestone peaks mirrored in the Li River — one of the most photogenic landscapes in all of Asia.'},
+    {name:'Chengdu',safety:8.8,vibes:['chill','exploration','heritage'],tier:2,fit:['family','friends','partner','solo'],desc:'Giant panda base, fiery Sichuan cuisine and a laid-back teahouse culture. The most livable city in China.'},
+  ],
+  'Singapore': [
+    {name:'Marina Bay Sands',safety:9.7,vibes:['luxury','trendy','exploration'],tier:4,fit:['partner','friends','family','solo'],desc:'The iconic triple-tower resort with its rooftop infinity pool — Singapore\'s most recognisable skyline landmark.'},
+    {name:'Sentosa Island',safety:9.5,vibes:['chill','party','nature'],tier:3,fit:['family','friends','partner'],desc:'Beaches, Universal Studios and world-class resorts on a leisure island a short cable car or monorail ride from the city.'},
+    {name:'Gardens by the Bay',safety:9.7,vibes:['nature','exploration','trendy'],tier:3,fit:['family','partner','friends','solo'],desc:'Futuristic Supertrees and two climate-controlled glass domes — the Cloud Forest and Flower Dome — in the heart of the city.'},
+    {name:'Chinatown',safety:9.6,vibes:['heritage','exploration','hidden'],tier:2,fit:['solo','partner','family'],desc:'Singapore\'s cultural soul — Buddhist temples, hawker stalls, spice shops and a lively street food scene.'},
+    {name:'Orchard Road',safety:9.7,vibes:['trendy','luxury','party'],tier:3,fit:['friends','partner','solo'],desc:'Singapore\'s legendary shopping boulevard — a two-kilometre stretch of malls, flagship stores and rooftop bars.'},
+    {name:'Singapore Zoo & Night Safari',safety:9.6,vibes:['nature','adventure','chill'],tier:3,fit:['family','partner','friends'],desc:'One of the world\'s best open-concept zoos and the original Night Safari — exploring nocturnal wildlife after dark.'},
+  ],
+  'UAE': [
+    {name:'Dubai',safety:9.4,vibes:['luxury','trendy','party','exploration'],tier:4,fit:['solo','friends','partner','family'],desc:'Burj Khalifa, the Dubai Mall and a skyline built from ambition. The Middle East\'s most dazzling and futuristic city.'},
+    {name:'Abu Dhabi',safety:9.5,vibes:['luxury','heritage','chill'],tier:3,fit:['family','partner','solo'],desc:'Capital of the UAE and home of the majestic Sheikh Zayed Grand Mosque — one of the world\'s most beautiful buildings.'},
+    {name:'Palm Jumeirah',safety:9.4,vibes:['luxury','romantic','chill'],tier:4,fit:['partner','family','friends'],desc:'The world\'s largest artificial island shaped like a palm tree, lined with ultra-luxury resorts and private beach clubs.'},
+    {name:'Desert Safari Dubai',safety:9.0,vibes:['adventure','nature','hidden'],tier:2,fit:['friends','family','partner','solo'],desc:'Adrenaline dune bashing across the Arabian sands at sunset, followed by a Bedouin camp dinner under the stars.'},
+    {name:'Sharjah',safety:9.6,vibes:['heritage','exploration','hidden'],tier:2,fit:['family','partner','solo'],desc:'The UAE\'s cultural capital — world-class museums, traditional souqs and Islamic architecture just 30 minutes from Dubai.'},
+    {name:'Fujairah',safety:9.3,vibes:['nature','chill','romantic'],tier:2,fit:['partner','family','friends'],desc:'The emirate where the Hajar Mountains meet the Arabian Sea — pristine beaches, ancient forts and excellent diving.'},
+  ],
+  'South Korea': [
+    {name:'Seoul',safety:9.4,vibes:['trendy','heritage','exploration','party'],tier:2,fit:['solo','friends','partner','family'],desc:'Korea\'s electric capital — ancient palaces next to K-pop districts, street food alleys, and rooftop bars in Itaewon.'},
+    {name:'Gyeongju',safety:9.5,vibes:['heritage','hidden','chill'],tier:1,fit:['family','partner','solo'],desc:'The "museum without walls" — Silla-era royal tombs, Bulguksa Temple and Seokguram Grotto make this Korea\'s cultural heartland.'},
+    {name:'Busan',safety:9.3,vibes:['chill','nature','exploration','party'],tier:2,fit:['partner','friends','family','solo'],desc:'Korea\'s coastal city — Haeundae Beach, neon-lit Jagalchi fish market and colourful Gamcheon Culture Village.'},
+    {name:'Jeju',safety:9.5,vibes:['nature','romantic','adventure','chill'],tier:2,fit:['partner','family','friends'],desc:'Volcanic island paradise — Hallasan crater hikes, lava caves, waterfalls and the famous haenyeo diving women.'},
+    {name:'Daegu',safety:9.3,vibes:['hidden','heritage','nature','exploration'],tier:1,fit:['solo','partner','family'],desc:'Underrated Korean city with Palgongsan mountain trails, Donghwasa Temple and the lively Seomun Market.'},
+    {name:'Incheon',safety:9.3,vibes:['exploration','hidden','chill'],tier:1,fit:['family','partner','solo'],desc:'Coastal gateway city with a vibrant Chinatown, Songdo futuristic district and Wolmido island seafood.'},
+  ],
+  'Canada': [
+    {name:'Toronto',safety:9.0,vibes:['trendy','exploration','party','luxury'],tier:3,fit:['solo','friends','partner','family'],desc:'Canada\'s biggest city — CN Tower views, Kensington Market, world-class food scene and a buzzing lakefront. Multicultural and endlessly walkable.'},
+    {name:'Vancouver',safety:8.8,vibes:['nature','chill','trendy','adventure'],tier:3,fit:['partner','friends','family','solo'],desc:'Mountain-meets-ocean paradise — Stanley Park seawall, Granville Island market and the ski slopes of Whistler just 2 hours away.'},
+    {name:'Montreal',safety:8.7,vibes:['party','heritage','trendy','exploration'],tier:2,fit:['friends','solo','partner'],desc:'North America\'s most European city — cobblestone Old Port, world-class festivals like Jazz Fest and Osheaga, poutine and bagels around every corner.'},
+    {name:'Calgary',safety:9.1,vibes:['adventure','exploration','nature','chill'],tier:2,fit:['family','partner','friends','solo'],desc:'Gateway to the Rockies — stampede city with craft beer, vibrant Inglewood district and Banff National Park under 90 minutes away.'},
+    {name:'Quebec City',safety:9.3,vibes:['heritage','romantic','chill','exploration'],tier:2,fit:['partner','family','solo'],desc:'The only walled city in North America — dramatic Château Frontenac, Old Town UNESCO cobblestones, and a distinctly French soul.'},
+    {name:'Banff',safety:9.5,vibes:['nature','adventure','luxury','romantic'],tier:3,fit:['partner','family','friends','solo'],desc:'Jaw-dropping Rocky Mountain national park — turquoise Lake Louise, Moraine Lake, glacier hikes and hot springs surrounded by wildlife.'},
+  ],
+  'Switzerland': [
+  {name:'Zurich',safety:9.3,vibes:['trendy','luxury','exploration','heritage'],tier:3,fit:['solo','friends','partner','family'],desc:'Switzerland\'s largest city — Lake Zurich, Bahnhofstrasse shopping, Old Town charm and world-class museums.'},
+  {name:'Lucerne',safety:9.5,vibes:['heritage','romantic','chill','exploration'],tier:3,fit:['partner','family','solo'],desc:'Storybook Swiss city with Chapel Bridge, Lake Lucerne and spectacular mountain scenery.'},
+  {name:'Interlaken',safety:9.4,vibes:['nature','adventure','chill','exploration'],tier:3,fit:['friends','partner','solo','family'],desc:'Adventure capital between two lakes with access to Jungfraujoch, paragliding and alpine experiences.'},
+  {name:'Grindelwald',safety:9.6,vibes:['nature','adventure','luxury','romantic'],tier:3,fit:['partner','solo','friends'],desc:'Charming alpine village beneath the Eiger with hiking trails, cable cars and breathtaking views.'},
+  {name:'Zermatt',safety:9.7,vibes:['luxury','nature','romantic','adventure'],tier:3,fit:['partner','solo','friends','family'],desc:'Home of the Matterhorn with world-class skiing, mountain railways and unforgettable scenery.'},
+  {name:'Geneva',safety:9.2,vibes:['luxury','heritage','trendy','exploration'],tier:2,fit:['solo','partner','friends','family'],desc:'Elegant lakeside city known for Jet d\'Eau, international culture and beautiful waterfront promenades.'},
+  {name:'Bern',safety:9.4,vibes:['heritage','chill','exploration','romantic'],tier:2,fit:['solo','partner','family'],desc:'Switzerland\'s capital featuring a UNESCO-listed Old Town, arcades and riverside views.'},
+  {name:'Lugano',safety:9.3,vibes:['luxury','chill','romantic','nature'],tier:2,fit:['partner','family','solo'],desc:'Mediterranean-style Swiss city with palm-lined lakeshores and stunning mountain scenery.'},
+],
+'Argentina': [
+  {name:'Buenos Aires',safety:8.5,vibes:['party','trendy','heritage','exploration'],tier:3,fit:['solo','friends','partner','family'],desc:'Argentina\'s vibrant capital — tango shows, colourful La Boca streets, historic San Telmo and world-famous steakhouses.'},
+  {name:'Bariloche',safety:9.2,vibes:['nature','adventure','romantic','chill'],tier:3,fit:['partner','friends','family','solo'],desc:'Patagonia\'s alpine paradise — crystal-clear lakes, snow-capped mountains, hiking trails and famous chocolate shops.'},
+  {name:'Mendoza',safety:9.0,vibes:['luxury','romantic','chill','exploration'],tier:3,fit:['partner','friends','solo'],desc:'Argentina\'s wine capital — Malbec vineyards, Andes mountain views and world-class food experiences.'},
+  {name:'El Calafate',safety:9.4,vibes:['nature','adventure','exploration','chill'],tier:3,fit:['solo','friends','partner','family'],desc:'Gateway to Los Glaciares National Park and the spectacular Perito Moreno Glacier.'},
+  {name:'Ushuaia',safety:9.3,vibes:['adventure','nature','exploration','chill'],tier:3,fit:['solo','friends','partner'],desc:'The world\'s southernmost city — Beagle Channel cruises, Tierra del Fuego National Park and dramatic landscapes.'},
+  {name:'Puerto Iguazú',safety:9.1,vibes:['nature','adventure','family','exploration'],tier:3,fit:['family','partner','friends','solo'],desc:'Home to the breathtaking Iguazú Falls, one of the world\'s greatest natural wonders.'},
+  {name:'Salta',safety:8.9,vibes:['heritage','exploration','chill','romantic'],tier:2,fit:['solo','partner','family'],desc:'Colonial architecture, colourful mountain scenery and the famous Train to the Clouds.'},
+  {name:'Córdoba',safety:8.8,vibes:['trendy','party','heritage','exploration'],tier:2,fit:['friends','solo','partner'],desc:'Argentina\'s university city with lively nightlife, historic churches and nearby mountain escapes.'},
+],
+'Philippines': [
+  {name:'Manila',safety:8.2,vibes:['party','heritage','trendy','exploration'],tier:2,fit:['solo','friends','partner','family'],desc:'The bustling capital — Intramuros, Rizal Park, Binondo food trips and a vibrant nightlife scene.'},
+  {name:'Boracay',safety:9.1,vibes:['beach','luxury','party','romantic'],tier:3,fit:['partner','friends','family'],desc:'World-famous White Beach, crystal-clear waters, island hopping and stunning sunsets.'},
+  {name:'Palawan',safety:9.5,vibes:['nature','adventure','romantic','chill'],tier:3,fit:['partner','friends','family','solo'],desc:'Often called the world\'s most beautiful island destination with lagoons, limestone cliffs and turquoise waters.'},
+  {name:'Cebu',safety:8.8,vibes:['adventure','beach','party','exploration'],tier:3,fit:['friends','solo','partner','family'],desc:'Historic city with whale shark encounters, waterfalls, island hopping and vibrant nightlife.'},
+  {name:'Bohol',safety:9.2,vibes:['nature','chill','romantic','family'],tier:2,fit:['family','partner','solo'],desc:'Home to the Chocolate Hills, tarsiers and beautiful river cruises.'},
+  {name:'Siargao',safety:9.3,vibes:['adventure','chill','beach','trendy'],tier:3,fit:['solo','friends','partner'],desc:'The surfing capital of the Philippines with island hopping, lagoons and laid-back vibes.'},
+  {name:'Davao',safety:9.0,vibes:['nature','exploration','family','chill'],tier:2,fit:['family','solo','partner'],desc:'Gateway to Mount Apo, eagle conservation parks and rich Mindanao culture.'},
+  {name:'Vigan',safety:9.1,vibes:['heritage','romantic','exploration','chill'],tier:2,fit:['partner','family','solo'],desc:'UNESCO-listed colonial city with cobblestone streets and Spanish-era architecture.'},
+],
+'Malaysia': [
+  {name:'Kuala Lumpur',safety:8.9,vibes:['trendy','party','luxury','exploration'],tier:3,fit:['solo','friends','partner','family'],desc:'Malaysia\'s vibrant capital — Petronas Towers, rooftop bars, street food markets and world-class shopping.'},
+  {name:'Langkawi',safety:9.4,vibes:['beach','romantic','luxury','chill'],tier:3,fit:['partner','family','friends'],desc:'Tropical island paradise with white-sand beaches, sky bridges and crystal-clear waters.'},
+  {name:'Penang',safety:9.2,vibes:['food','heritage','exploration','trendy'],tier:3,fit:['solo','friends','partner','family'],desc:'Malaysia\'s food capital featuring George Town street art, colonial architecture and legendary hawker cuisine.'},
+  {name:'Cameron Highlands',safety:9.5,vibes:['nature','chill','romantic','exploration'],tier:2,fit:['partner','family','solo'],desc:'Cool mountain retreat known for tea plantations, strawberry farms and scenic hiking trails.'},
+  {name:'Kota Kinabalu',safety:9.1,vibes:['nature','adventure','beach','exploration'],tier:3,fit:['friends','solo','partner','family'],desc:'Gateway to Mount Kinabalu, island hopping adventures and spectacular Borneo sunsets.'},
+  {name:'Malacca',safety:9.3,vibes:['heritage','chill','romantic','exploration'],tier:2,fit:['partner','family','solo'],desc:'UNESCO-listed historic city blending Portuguese, Dutch and Malaysian influences.'},
+  {name:'Perhentian Islands',safety:9.6,vibes:['beach','adventure','nature','chill'],tier:3,fit:['friends','partner','solo'],desc:'Pristine tropical islands with turquoise waters, coral reefs and incredible snorkeling.'},
+  {name:'Johor Bahru',safety:8.8,vibes:['family','trendy','shopping','exploration'],tier:2,fit:['family','friends','solo'],desc:'Modern southern city known for theme parks, shopping districts and easy Singapore access.'},
+],
+'New Zealand': [
+  {name:'Auckland',safety:9.4,vibes:['trendy','exploration','nature','party'],tier:3,fit:['solo','friends','partner','family'],desc:'New Zealand\'s largest city — volcanic viewpoints, waterfront dining, island escapes and a vibrant urban culture.'},
+  {name:'Queenstown',safety:9.7,vibes:['adventure','nature','luxury','romantic'],tier:3,fit:['friends','partner','solo'],desc:'The adventure capital of New Zealand with bungee jumping, jet boating, skiing and stunning alpine scenery.'},
+  {name:'Rotorua',safety:9.3,vibes:['nature','heritage','exploration','family'],tier:2,fit:['family','solo','partner'],desc:'Famous for geothermal wonders, Māori culture, geysers and bubbling mud pools.'},
+  {name:'Wellington',safety:9.2,vibes:['heritage','trendy','food','exploration'],tier:2,fit:['solo','friends','partner'],desc:'The capital city known for its café culture, waterfront, museums and creative arts scene.'},
+  {name:'Christchurch',safety:9.3,vibes:['chill','nature','heritage','exploration'],tier:2,fit:['family','partner','solo'],desc:'The Garden City featuring beautiful parks, riverside attractions and access to the South Island wilderness.'},
+  {name:'Milford Sound',safety:9.8,vibes:['nature','adventure','romantic','chill'],tier:3,fit:['partner','family','solo','friends'],desc:'One of the world\'s most spectacular fjords with waterfalls, cruises and dramatic mountain scenery.'},
+  {name:'Wanaka',safety:9.6,vibes:['nature','chill','romantic','adventure'],tier:3,fit:['partner','solo','friends'],desc:'Picturesque lakeside town offering hiking, skiing and breathtaking South Island landscapes.'},
+  {name:'Taupō',safety:9.4,vibes:['adventure','nature','family','exploration'],tier:2,fit:['family','friends','solo'],desc:'Lakefront destination famous for Huka Falls, geothermal attractions and outdoor adventures.'},
+],
+'Germany': [
+  {name:'Berlin',safety:8.8,vibes:['party','heritage','trendy','exploration'],tier:3,fit:['solo','friends','partner','family'],desc:'Germany\'s vibrant capital — Brandenburg Gate, Berlin Wall history, world-class museums and legendary nightlife.'},
+  {name:'Munich',safety:9.3,vibes:['heritage','luxury','exploration','family'],tier:3,fit:['family','partner','friends','solo'],desc:'Home of Oktoberfest, royal palaces, beer gardens and easy access to the Bavarian Alps.'},
+  {name:'Hamburg',safety:9.0,vibes:['trendy','party','exploration','heritage'],tier:2,fit:['solo','friends','partner'],desc:'Germany\'s great port city with canals, harbour cruises, historic warehouses and lively nightlife.'},
+  {name:'Cologne',safety:9.1,vibes:['heritage','romantic','exploration','chill'],tier:2,fit:['partner','family','solo'],desc:'Famous for its magnificent cathedral, Rhine River views and charming old town atmosphere.'},
+  {name:'Frankfurt',safety:8.9,vibes:['luxury','trendy','exploration','business'],tier:2,fit:['solo','friends','partner'],desc:'Modern skyline city blending finance, culture, museums and traditional German taverns.'},
+  {name:'Dresden',safety:9.2,vibes:['heritage','romantic','chill','exploration'],tier:2,fit:['partner','family','solo'],desc:'Baroque beauty on the Elbe River known for stunning architecture and art collections.'},
+  {name:'Heidelberg',safety:9.4,vibes:['romantic','heritage','chill','exploration'],tier:2,fit:['partner','solo','family'],desc:'Fairytale university town with a hilltop castle and picturesque riverside scenery.'},
+  {name:'Garmisch-Partenkirchen',safety:9.6,vibes:['nature','adventure','romantic','chill'],tier:3,fit:['partner','friends','family','solo'],desc:'Gateway to Germany\'s Alps featuring mountain adventures, lakes and breathtaking scenery.'},
+],
+'South Africa': [
+  {name:'Cape Town',safety:9.2,vibes:['nature','adventure','luxury','romantic'],tier:3,fit:['partner','friends','family','solo'],desc:'South Africa\'s most iconic city — Table Mountain, stunning beaches, vineyards and vibrant waterfront culture.'},
+  {name:'Johannesburg',safety:8.5,vibes:['heritage','trendy','exploration','party'],tier:2,fit:['solo','friends','partner'],desc:'The country\'s largest city with rich history, Soweto tours, museums and a thriving arts scene.'},
+  {name:'Durban',safety:8.9,vibes:['beach','chill','party','family'],tier:2,fit:['family','friends','partner'],desc:'Warm Indian Ocean beaches, famous Golden Mile promenade and incredible multicultural food.'},
+  {name:'Kruger National Park',safety:9.7,vibes:['nature','adventure','luxury','exploration'],tier:3,fit:['family','partner','friends','solo'],desc:'One of Africa\'s greatest safari destinations with Big Five wildlife and luxury game lodges.'},
+  {name:'Stellenbosch',safety:9.5,vibes:['luxury','romantic','chill','heritage'],tier:3,fit:['partner','friends'],desc:'South Africa\'s wine capital featuring vineyards, mountain scenery and gourmet dining.'},
+  {name:'Garden Route',safety:9.4,vibes:['nature','roadtrip','adventure','romantic'],tier:3,fit:['family','partner','friends'],desc:'A spectacular coastal journey filled with forests, lagoons, wildlife and scenic drives.'},
+  {name:'Port Elizabeth',safety:9.0,vibes:['beach','nature','family','chill'],tier:2,fit:['family','partner','solo'],desc:'Friendly coastal city with beaches, marine life and access to nearby safari parks.'},
+  {name:'Drakensberg',safety:9.6,vibes:['nature','adventure','chill','exploration'],tier:3,fit:['solo','partner','friends'],desc:'Dramatic mountain range offering hiking trails, waterfalls and breathtaking landscapes.'},
+],
+'European Union': [
+  {name:'Paris',safety:9.0,vibes:['romantic','luxury','heritage','exploration'],tier:3,fit:['partner','family','solo','friends'],desc:'The City of Light — Eiffel Tower, Louvre Museum, charming cafés and world-famous landmarks.'},
+  {name:'Rome',safety:8.9,vibes:['heritage','romantic','exploration','food'],tier:3,fit:['partner','family','solo','friends'],desc:'Ancient wonders, Vatican City, incredible cuisine and centuries of history around every corner.'},
+  {name:'Barcelona',safety:8.8,vibes:['beach','party','heritage','trendy'],tier:3,fit:['friends','partner','solo'],desc:'Gaudí architecture, Mediterranean beaches, vibrant nightlife and rich Catalan culture.'},
+  {name:'Amsterdam',safety:9.3,vibes:['trendy','chill','exploration','romantic'],tier:3,fit:['solo','friends','partner'],desc:'Canals, cycling culture, world-class museums and picturesque historic streets.'},
+  {name:'Prague',safety:9.4,vibes:['heritage','romantic','chill','exploration'],tier:2,fit:['partner','family','solo'],desc:'Fairytale architecture, medieval squares and one of Europe\'s most beautiful old towns.'},
+  {name:'Vienna',safety:9.5,vibes:['luxury','heritage','romantic','chill'],tier:3,fit:['partner','family','solo'],desc:'Imperial palaces, classical music, coffee houses and elegant city streets.'},
+  {name:'Santorini',safety:9.4,vibes:['romantic','luxury','beach','chill'],tier:3,fit:['partner'],desc:'Whitewashed villages, dramatic cliffs and unforgettable sunsets overlooking the Aegean Sea.'},
+  {name:'Interlaken',safety:9.6,vibes:['nature','adventure','romantic','exploration'],tier:3,fit:['friends','partner','family','solo'],desc:'Swiss alpine paradise with lakes, mountains and adventure sports.'},
+],
+};
+
+// ===== Recommendation engine — score each city against user preferences =====
+// Inputs: {country, vibe, budget (number, local currency), days, who/companion}
+// Output: matchScore 0–10 + breakdown (vibe, budget, companion, safety)
+function scoreCityForPrefs(city, prefs) {
+  // 1) VIBE match — primary driver (max 4.0)
+  const userVibe = (prefs.vibe || 'chill').toLowerCase();
+  const synonyms = {
+    relax:'chill', natural:'nature', capture:'trendy',
+    heritage:'heritage', hidden:'hidden', adventure:'adventure',
+    party:'party', luxury:'luxury', trendy:'trendy', romantic:'romantic',
+    chill:'chill', nature:'nature', exploration:'exploration'
+  };
+  const targetVibe = synonyms[userVibe] || userVibe;
+  const cityVibes = city.vibes || [];
+  let vibeScore = 0;
+  if (cityVibes.includes(targetVibe)) vibeScore = 4.0;            // perfect hit
+  else if (cityVibes.some(v => softVibeMatch(v, targetVibe))) vibeScore = 2.5; // related
+  else vibeScore = 0.8;                                            // weak
+
+  // 2) BUDGET fit (max 2.5) — compare user budget to city's daily cost tier
+  // tier 1 ~ $40/day, 2 ~ $80, 3 ~ $150, 4 ~ $280
+  const tierDailyUSD = {1:40, 2:80, 3:150, 4:280}[city.tier] || 100;
+  // Approximate user's daily USD budget
+  const userDailyLocal = (prefs.budget || 2500) / Math.max(1, prefs.days || 7);
+  const fxToUSD = approxFxToUSD(prefs.country);
+  const userDailyUSD = userDailyLocal * fxToUSD;
+  const ratio = userDailyUSD / tierDailyUSD;
+  let budgetScore;
+  if (ratio >= 0.8 && ratio <= 1.6) budgetScore = 2.5;             // sweet spot
+  else if (ratio >= 0.5 && ratio < 0.8) budgetScore = 1.6;         // a stretch
+  else if (ratio > 1.6) budgetScore = 2.2;                          // can afford easily
+  else budgetScore = 0.7;                                           // out of budget
+
+  // 3) COMPANION fit (max 1.5)
+  const who = (prefs.who || 'Solo').toLowerCase();
+  const fitTag = who.includes('solo') ? 'solo'
+              : who.includes('partner') || who.includes('couple') ? 'partner'
+              : who.includes('family') ? 'family'
+              : who.includes('friend') ? 'friends' : 'solo';
+  const companionScore = (city.fit || []).includes(fitTag) ? 1.5 : 0.6;
+
+  // 4) SAFETY bonus (max 2.0) — normalised from 0–10 safety scale
+  const safetyScore = ((city.safety || 8.0) / 10) * 2.0;
+
+  const total = +(vibeScore + budgetScore + companionScore + safetyScore).toFixed(2);
+  return {total, vibeScore, budgetScore, companionScore, safetyScore};
+}
+
+function softVibeMatch(a, b) {
+  const groups = [
+    ['chill','romantic','luxury'],
+    ['party','trendy','exploration'],
+    ['nature','adventure','hidden'],
+    ['heritage','exploration','hidden'],
+    ['luxury','romantic','trendy'],
+  ];
+  return groups.some(g => g.includes(a) && g.includes(b));
+}
+
+function approxFxToUSD(country) {
+  // Rough conversion: 1 unit of local currency → USD
+  const fx = {
+    'Japan':0.0066,'India':0.012,'Thailand':0.029,'Italy':1.08,'France':1.08,
+    'Spain':1.08,'Greece':1.08,'Indonesia':0.000063,'Iceland':0.0072,'Mexico':0.058,
+    'Morocco':0.10,'Vietnam':0.000040,'Portugal':1.08,'Peru':0.27,'Turkey':0.029,
+    'Egypt':0.020,'Australia':0.66,'Brazil':0.20,'Kenya':0.0077,'Norway':0.092,
+    'South Korea':0.00073
+  };
+  return fx[country] || 1.0;
+}
+
+// Best-time-of-year hints by country
+const bestTimeDB = {
+  'Japan':'Late spring (Apr–May) — mild weather, cherry blossoms and comfortable evenings.',
+  'India':'Oct–March — cooler, drier and ideal for sightseeing across most regions.',
+  'Thailand':'Nov–Feb — dry season, lower humidity, perfect for islands and trekking.',
+  'Italy':'May–June or Sept — warm but not crowded; shoulder-season magic.',
+  'France':'May, June or Sept — pleasant temps, blooming countryside, fewer queues.',
+  'Spain':'Apr–June or Sept–Oct — warm sun, tapas terraces, no peak-summer crush.',
+  'Portugal':'Mar–May or Sept–Oct — golden light, surf-ready coast, mild cities.',
+  'Greece':'May–June or Sept — swimmable seas, fewer cruise crowds.',
+  'Indonesia':'May–Sept — dry season across Bali and Java, best for beaches and trekking.',
+  'Vietnam':'Nov–April — cool, dry north and sunny central coast.',
+  'USA':'Late spring or early autumn — mild across most regions, fewer crowds.',
+  'UK':'May–Sept — long days, warmest temps, gardens at their peak.',
+  'Turkey':'Apr–May or Sept–Oct — warm coast, comfortable city sightseeing.',
+  'China':'Apr–May or Sept–Oct — mild temperatures, cherry blossoms or golden foliage, fewer crowds than summer.',
+  'Singapore':'Feb–Apr — driest months with lower humidity and mostly clear skies.',
+  'UAE':'Nov–March — pleasant 20–28°C, perfect for desert and city alike.',
+  'South Korea':'Apr–May (spring) or Sept–Nov (autumn) — cherry blossoms or autumn foliage, mild temperatures and clear skies.',
+  'Australia':'Sept–Nov or Mar–May — shoulder seasons, ideal across most of the country.',
+  '_default':'Shoulder seasons (spring or autumn) — fewer crowds, gentler weather.',
+};
+
+// Pack-list hints — keys MUST match the vibe ids used in pickVibe()
+// Vibes: trendy, heritage, relax, capture, luxury, hidden, natural, adventure
+const packDB = {
+  trendy:'Statement outfits · Portable charger · Compact camera · Comfy sneakers · Sunglasses',
+  heritage:'Modest layers (for temples) · Walking shoes · Sun hat · Reusable bottle · Notebook',
+  relax:'Loose linens · Sandals · Sunscreen SPF 50 · Kindle / book · Refillable bottle',
+  capture:'Camera + spare battery · Small tripod · Lens cloth · Walking shoes · Power bank',
+  luxury:'Smart-casual outfits · Quality sunglasses · Skincare essentials · Light cashmere',
+  hidden:'Daypack · Offline maps · Power bank · Light rain shell · Sturdy shoes',
+  natural:'Hiking shoes · Rain jacket · Insect repellent · Reusable bottle · Binoculars',
+  adventure:'Trail shoes · Quick-dry layers · First-aid basics · Headlamp · Dry bag',
+  // legacy fallbacks
+  chill:'Comfortable walking shoes · Light layers · Reusable water bottle · Book or journal',
+  party:'Versatile evening outfit · Portable charger · Earplugs · Light jacket for late nights',
+  exploration:'Sturdy shoes · Daypack · Power bank · Universal adapter · First-aid basics',
+  nature:'Hiking shoes · Rain jacket · Insect repellent · Reusable bottle · Binoculars',
+  romantic:'Two evening outfits · Cologne/perfume · Camera · Comfy daytime shoes',
+  _default:'Walking shoes · Layers for changing weather · Power bank · Reusable bottle · Daypack',
+};
+
+// Add-ons for "who" — appended so the pack reflects companion type too
+const packWhoAddon = {
+  Solo:'Crossbody anti-theft bag · Personal alarm',
+  Friends:'Group power strip · Card games · Group photo selfie stick',
+  Partner:'Date-night outfit · Shared travel journal',
+  Couple:'Date-night outfit · Shared travel journal',
+  Family:'Snacks for kids · Wet wipes · Compact first-aid kit',
+  Kids:'Snacks for kids · Wet wipes · Compact first-aid kit',
+};
+
+// Activity templates by vibe (used to deterministically build days)
+const dayTemplates = {
+  chill: [
+    {dayTitle:'Arrival & easy first-night stroll', activities:['Hotel check-in','Sunset park walk','Local café dinner','Rooftop nightcap']},
+    {dayTitle:'Markets, gardens & slow lunch', activities:['Morning market','Botanical garden','Long lunch','Riverside reading']},
+    {dayTitle:'Old town & artisan cafés', activities:['Heritage walk','Coffee tasting','Boutique browsing','Cozy bistro']},
+    {dayTitle:'Day trip — quiet countryside', activities:['Train escape','Village lunch','Scenic viewpoint','Return at dusk']},
+    {dayTitle:'Spa morning, gallery afternoon', activities:['Wellness session','Healthy brunch','Modern art museum','Wine bar']},
+    {dayTitle:'Riverside cafés & indie shops', activities:['Slow breakfast','Indie quarter','Riverwalk','Live jazz']},
+    {dayTitle:'Sunrise viewpoint & gentle goodbye', activities:['Sunrise hike','Local bakery','Souvenir hunt','Farewell dinner']},
+  ],
+  party: [
+    {dayTitle:'Arrival & first-night neon crawl', activities:['Hotel drop','Welcome cocktails','Street food crawl','Late-night DJ bar']},
+    {dayTitle:'Beach by day, club by night', activities:['Beach club','Pool lunch','Sunset session','Headline DJ set']},
+    {dayTitle:'Recovery brunch & rooftop sundowners', activities:['Late brunch','Spa nap','Rooftop bar hop','Underground club']},
+    {dayTitle:'Day trip & night-market roam', activities:['Daytime adventure','Street snacks','Night market','Live music venue']},
+    {dayTitle:'Hidden speakeasy crawl', activities:['Coffee revival','Cocktail class','Speakeasy hunt','After-hours lounge']},
+    {dayTitle:'Boat party & beach bonfire', activities:['Boat charter','Floating lunch','Beach DJ','Bonfire chill-out']},
+    {dayTitle:'Final blowout & lazy goodbye', activities:['Recovery brunch','Pool float','Farewell dinner','One last dance floor']},
+  ],
+  exploration: [
+    {dayTitle:'Arrival & landmark orientation', activities:['Hotel check-in','City walking tour','Iconic viewpoint','Local dinner']},
+    {dayTitle:'Museums & old quarter wander', activities:['National museum','Heritage lanes','Street food lunch','Evening lookout']},
+    {dayTitle:'Hidden alleys & street food crawl', activities:['Local guide','Hidden temple','Market lunch','Backstreet bar']},
+    {dayTitle:'Day trip — ancient ruins', activities:['Early train','Site exploration','Picnic lunch','Sunset return']},
+    {dayTitle:'Cultural workshop & nightlife', activities:['Hands-on class','Artisan visit','Tasting dinner','Live music']},
+    {dayTitle:'Off-beat district & rooftop dinner', activities:['Indie quarter','Vintage shops','Rooftop dinner','Stargazing']},
+    {dayTitle:'Souvenirs & farewell feast', activities:['Last-minute market','Tea ceremony','Farewell feast','Goodbye walk']},
+  ],
+  nature: [
+    {dayTitle:'Arrival & easy nature walk', activities:['Lodge check-in','Forest trail','Lakeside picnic','Stargazing']},
+    {dayTitle:'Hike to a waterfall', activities:['Early start','Waterfall trail','Swim stop','Campfire dinner']},
+    {dayTitle:'Wildlife spotting morning', activities:['Dawn safari','Field breakfast','Nap & journal','Sunset viewpoint']},
+    {dayTitle:'Day trip — national park', activities:['Park entry','Long hike','Picnic lunch','Ranger talk']},
+    {dayTitle:'Kayak or paddle adventure', activities:['Kayak rental','River exploration','Riverside lunch','Sunset paddle']},
+    {dayTitle:'Mountain viewpoint & hot spring', activities:['Cable car','Summit walk','Hot spring soak','Hearty dinner']},
+    {dayTitle:'Slow morning & farewell trail', activities:['Birdwatching','Farm breakfast','Final short hike','Goodbye picnic']},
+  ],
+  luxury: [
+    {dayTitle:'Arrival & private welcome dinner', activities:['Limo transfer','Suite check-in','Spa welcome','Tasting-menu dinner']},
+    {dayTitle:'Private guide & boutique lunch', activities:['Private tour','Hidden gallery','Chef\'s lunch','Couture browsing']},
+    {dayTitle:'Spa day & rooftop sundowners', activities:['Hammam','Massage','Champagne sunset','Cigar lounge']},
+    {dayTitle:'Helicopter day trip', activities:['Heli transfer','Vineyard lunch','Cellar tasting','Return at dusk']},
+    {dayTitle:'Yacht or vintage car tour', activities:['Private charter','Onboard lunch','Coastal exploration','Marina dinner']},
+    {dayTitle:'Michelin tasting evening', activities:['Slow brunch','Atelier visit','Tasting menu','Jazz lounge']},
+    {dayTitle:'Final indulgence & farewell', activities:['Private breakfast','Last spa','Farewell tasting','Limo airport']},
+  ],
+};
+
+// Pick template + emoji
+const vibeMeta = {
+  chill:{emoji:'🌿',adj:'relaxed'},
+  relax:{emoji:'🧘',adj:'relaxed'},
+  party:{emoji:'🎉',adj:'energetic'},
+  exploration:{emoji:'🧭',adj:'curious'},
+  heritage:{emoji:'🏛️',adj:'cultural'},
+  capture:{emoji:'📸',adj:'creative'},
+  hidden:{emoji:'💎',adj:'offbeat'},
+  adventure:{emoji:'🧗',adj:'adventurous'},
+  luxury:{emoji:'💎',adj:'indulgent'},
+  nature:{emoji:'🏞️',adj:'wild'},
+  natural:{emoji:'🌿',adj:'wild'},
+  trendy:{emoji:'📸',adj:'trendy'},
+  romantic:{emoji:'💕',adj:'romantic'},
+};
+const vibeTemplateMap = {
+  relax:'chill', heritage:'exploration', capture:'trendy', hidden:'exploration', natural:'nature', adventure:'nature'
+};
+
+// ====== Page 5 — render city list based on userPrefs.country ======
+function renderPickCity() {
+  const country = (window.userPrefs && userPrefs.country) || 'Japan';
+  const prefs = window.userPrefs || {};
+  // Score every city with the recommendation algorithm and sort by total match
+  const raw = (cityDB[country] || cityDB._default).slice();
+  const scored = raw.map(c => {
+    const s = scoreCityForPrefs(c, prefs);
+    return Object.assign({}, c, {match: s.total, breakdown: s, score: s.total});
+  }).sort((a,b)=>b.match - a.match);
+  const cities = scored;
+  const eyebrow = document.getElementById('p5eyebrow');
+  if (eyebrow) eyebrow.textContent = `STEP 3 · WHERE IN ${country.toUpperCase()}?`;
+  const wrap = document.getElementById('p5cities');
+  // Match-score colour: green > yellow > orange > red
+  const scoreColor = s => s >= 8.5 ? '#00d4b8' : s >= 7 ? '#f0c040' : s >= 5.5 ? '#ff8a3d' : '#ff5a5a';
+  const vibeLabel = (prefs.vibe || 'chill').toLowerCase();
+  wrap.innerHTML = cities.map((c,i)=>{
+    const top = i === 0 ? `<span style="position:absolute;top:0.6rem;right:0.6rem;background:linear-gradient(135deg,#f0c040,#ff8a3d);color:#1a1208;font-weight:800;font-size:0.6rem;letter-spacing:0.08em;padding:0.18rem 0.5rem;border-radius:999px;">★ TOP MATCH</span>` : '';
+    const vibePill = (c.vibes||[]).slice(0,3).map(v=>`<span style="font-size:0.6rem;background:rgba(0,212,184,0.12);border:1px solid rgba(0,212,184,0.3);color:#7fe6d2;padding:0.15rem 0.45rem;border-radius:999px;letter-spacing:0.04em;">${v}</span>`).join(' ');
+    return `
+    <button class="gqg-city" data-name="${c.name}" data-idx="${i}" onclick="selectGqgCity(${i})" style="--gqg-score-color:${scoreColor(c.match)};position:relative;">
+      ${top}
+      <div class="gqg-city-row">
+        <span class="gqg-city-name">${c.name}</span>
+        <span class="gqg-city-score" title="Match score for your ${vibeLabel} vibe, budget & travel style">${c.match.toFixed(1)}</span>
+      </div>
+      <div class="gqg-city-desc">${c.desc}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.55rem;">${vibePill}</div>
+    </button>`;
+  }).join('');
+  // Tagline above the list
+  const tagline = document.getElementById('p5tagline');
+  if (tagline) {
+    tagline.innerHTML = `Ranked by your <b style="color:#f0c040;">${vibeLabel}</b> vibe, budget & travel style — top picks first.`;
+  }
+  window._gqgCities = cities;
+  window._gqgSelectedCity = null;
+  document.getElementById('p5customCity').value = '';
+  document.getElementById('p5notes').value = '';
+}
+
+function selectGqgCity(idx) {
+  window._gqgSelectedCity = window._gqgCities[idx];
+  document.querySelectorAll('#p5cities .gqg-city').forEach((el,i)=>el.classList.toggle('selected', i===idx));
+  document.getElementById('p5customCity').value = '';
+}
+
+// React to free-text override
+document.addEventListener('input', e => {
+  if (e.target && e.target.id === 'p5customCity' && e.target.value.trim()) {
+    window._gqgSelectedCity = {name:e.target.value.trim(), score:8.0, desc:'Your custom destination'};
+    document.querySelectorAll('#p5cities .gqg-city').forEach(el=>el.classList.remove('selected'));
+  }
+});
+
+const cityLandmarks = {
+  "Tokyo": [
+    "Senso-ji Temple in Asakusa",
+    "Tsukiji Outer Market",
+    "Shibuya Crossing & Shibuya Sky",
+    "Meiji Jingu Shrine",
+    "Golden Gai bars in Shinjuku",
+    "teamLab Planets Tokyo",
+    "Ueno Park & Tokyo National Museum",
+    "Omoide Yokocho yakitori alley"
+  ,
+    "Tokyo Tower observation deck",
+    "Akihabara Electric Town",
+    "Harajuku & Takeshita Street",
+    "Tokyo Skytree",
+    "Yanaka old neighborhood walk",
+    "Roppongi Hills Mori Tower",
+    "Imperial Palace East Gardens",
+    "Odaiba & Rainbow Bridge"
+  ],
+  "Kyoto": [
+    "Fushimi Inari Taisha",
+    "Kinkaku-ji (Golden Pavilion)",
+    "Arashiyama Bamboo Grove",
+    "Gion geisha district",
+    "Nishiki Market",
+    "Kiyomizu-dera",
+    "Philosopher's Path",
+    "Pontocho Alley dinner"
+  ,
+    "Ryoan-ji rock garden",
+    "Tofuku-ji temple",
+    "Heian Shrine",
+    "Daitoku-ji Zen complex",
+    "Kyoto Imperial Palace",
+    "Sanjusangen-do (1001 Buddhas)",
+    "Kurama-dera mountain temple",
+    "Uji & Byodo-in Phoenix Hall"
+  ],
+  "Osaka": [
+    "Dotonbori & Glico Sign",
+    "Osaka Castle",
+    "Kuromon Ichiba Market",
+    "Shinsekai & Tsutenkaku Tower",
+    "Umeda Sky Building",
+    "Namba Yasaka Shrine",
+    "Nakazakicho cafés",
+    "Universal Studios Japan"
+  ,
+    "Sumiyoshi Taisha",
+    "Osaka Aquarium Kaiyukan",
+    "Tempozan Ferris Wheel",
+    "Shitennoji Temple",
+    "Den Den Town",
+    "America-mura youth district",
+    "Tennoji Park & Abeno Harukas",
+    "Expo '70 Commemorative Park"
+  ],
+  "Hokkaido (Sapporo & Niseko)": [
+    "Sapporo Beer Museum",
+    "Otaru Canal",
+    "Mount Yotei viewpoint",
+    "Niseko Hirafu ski village",
+    "Nijo Market Sapporo",
+    "Lake Toya onsen",
+    "Furano lavender fields",
+    "Asahiyama Zoo"
+  ,
+    "Mt. Moiwa ropeway night view",
+    "Shiroi Koibito Park",
+    "Noboribetsu Hell Valley",
+    "Hakodate Morning Market",
+    "Mt. Hakodate night view",
+    "Biei blue pond",
+    "Shikotsu Lake",
+    "Daisetsuzan National Park"
+  ],
+  "Okinawa": [
+    "Shuri Castle",
+    "Churaumi Aquarium",
+    "Kokusai-dori in Naha",
+    "Kabira Bay (Ishigaki)",
+    "Cape Manzamo",
+    "Taketomi Island sand village",
+    "Mihama American Village",
+    "Kerama Islands snorkel trip"
+  ,
+    "Sefa-utaki sacred site",
+    "Cape Maeda blue cave snorkel",
+    "Naha Tsuboya pottery street",
+    "Bise fukugi tree path",
+    "Iriomote jungle cruise",
+    "Yomitan pottery village",
+    "Hiji Falls hike",
+    "Zamami Island ferry"
+  ],
+  "Hakone": [
+    "Hakone Open-Air Museum",
+    "Lake Ashi pirate cruise",
+    "Owakudani volcanic valley",
+    "Hakone Shrine torii on the lake",
+    "Gora onsen ryokan district",
+    "Pola Museum of Art",
+    "Hakone Ropeway",
+    "Tenzan Tohji-kyo onsen"
+  ,
+    "Hakone Yumoto onsen town",
+    "Choanji Temple",
+    "Sengokuhara pampas grass field",
+    "Hakone Detached Palace Garden",
+    "Komagatake Ropeway",
+    "Yunessun bath complex",
+    "Ashinoko Skyline drive",
+    "Gora Park"
+  ],
+  "Nara": [
+    "Todai-ji & the Great Buddha",
+    "Nara Park deer feeding",
+    "Kasuga Taisha lantern shrine",
+    "Kofuku-ji pagoda",
+    "Naramachi old merchant quarter",
+    "Mount Wakakusa viewpoint",
+    "Isuien Garden",
+    "Horyu-ji temple"
+  ,
+    "Yakushi-ji temple",
+    "Toshodai-ji",
+    "Yoshino-yama cherry blossoms",
+    "Mt Yoshino lookout",
+    "Hannya-ji cosmos temple",
+    "Sai Daiji",
+    "Heijo Palace ruins",
+    "Asuka village bike ride"
+  ],
+  "Kanazawa": [
+    "Kenroku-en Garden",
+    "Kanazawa Castle",
+    "Higashi Chaya geisha district",
+    "Omicho Market",
+    "21st Century Museum of Contemporary Art",
+    "Nagamachi samurai district",
+    "Myoryu-ji (Ninja Temple)",
+    "Gold-leaf workshop in Higashiyama"
+  ,
+    "Nishi Chaya district",
+    "DT Suzuki Museum",
+    "Kazuemachi Chaya tea district",
+    "Oyama Shrine",
+    "Korinbo shopping",
+    "Ote-machi samurai houses",
+    "Notojima Aquarium day trip",
+    "Wajima morning market (Noto)"
+  ],
+  "Udaipur": [
+    "City Palace",
+    "Lake Pichola sunset boat ride",
+    "Jagdish Temple",
+    "Saheliyon ki Bari",
+    "Bagore ki Haveli folk show",
+    "Ambrai Ghat",
+    "Monsoon Palace (Sajjangarh)",
+    "Shilpgram crafts village"
+  ,
+    "Fateh Sagar Lake",
+    "Vintage Car Museum",
+    "Crystal Gallery",
+    "Karni Mata Ropeway",
+    "Sas-Bahu Temples",
+    "Eklingji Temple",
+    "Kumbhalgarh Fort day trip",
+    "Chittorgarh Fort day trip",
+    "Hathi Pol Bazaar miniature paintings",
+    "Bada Bazaar shopping",
+    "Fateh Sagar Lake boating",
+    "Sajjangarh Monsoon Palace sunset"
+  
+  ],
+  "Kerala (Alleppey & Munnar)": [
+    "Alleppey backwater houseboat",
+    "Munnar tea estates (Kolukkumalai)",
+    "Eravikulam National Park",
+    "Mattupetty Dam",
+    "Vembanad Lake",
+    "Kumarakom Bird Sanctuary",
+    "Marari Beach",
+    "Echo Point Munnar"
+  ,
+    "Top Station viewpoint",
+    "Tea Museum Munnar",
+    "Anamudi Peak trek",
+    "Pothamedu viewpoint",
+    "Punnamada Lake snake-boat point",
+    "Kuttanad paddy fields",
+    "Krishnapuram Palace",
+    "Cherai Beach"
+  ],
+  "Jaipur": [
+    "Amber Fort",
+    "Hawa Mahal",
+    "City Palace Jaipur",
+    "Jantar Mantar",
+    "Nahargarh Fort sunset",
+    "Johari Bazaar",
+    "Albert Hall Museum",
+    "Galtaji (Monkey Temple)"
+  ,
+    "Jal Mahal lake palace",
+    "Jaigarh Fort cannon",
+    "Sisodia Rani Garden",
+    "Bapu Bazaar",
+    "Birla Mandir",
+    "Panna Meena Ka Kund stepwell",
+    "Sambhar Salt Lake",
+    "Choki Dhani folk village",
+    "Amber Fort elephant ride",
+    "Chokhi Dhani Rajasthani village dinner",
+    "Bapu Bazaar handicraft shopping"
+  
+  ],
+  "Goa": [
+    "Baga & Anjuna beaches",
+    "Basilica of Bom Jesus (Old Goa)",
+    "Fort Aguada",
+    "Dudhsagar Falls",
+    "Anjuna Flea Market",
+    "Palolem Beach (South Goa)",
+    "Fontainhas Latin Quarter",
+    "Tito's Lane nightlife"
+  ,
+    "Chapora Fort",
+    "Arambol Beach drum circle",
+    "Calangute Beach",
+    "Spice plantation tour (Sahakari)",
+    "Saturday Night Market Arpora",
+    "Divar Island ferry ride",
+    "Cabo de Rama fort",
+    "Mandovi River casino cruise"
+  ],
+  "Rishikesh": [
+    "Laxman Jhula & Ram Jhula",
+    "Triveni Ghat aarti",
+    "Beatles Ashram (Chaurasi Kutia)",
+    "Neelkanth Mahadev Temple",
+    "Ganga white-water rafting at Shivpuri",
+    "Parmarth Niketan yoga",
+    "Kunjapuri Devi sunrise viewpoint",
+    "Garud Chatti waterfall"
+  ,
+    "Vashishta Cave meditation",
+    "Tera Manzil Temple",
+    "Bhootnath Temple",
+    "Phool Chatti waterfall",
+    "Patna Waterfall trek",
+    "Goa Beach Rishikesh",
+    "Rajaji National Park safari",
+    "Haridwar Har Ki Pauri evening aarti",
+    "Neer Garh Waterfall trek",
+    "Bungee jumping at Jumpin Heights Mohanchatti",
+    "Rishikesh Main Market shopping"
+  
+  ],
+  "Leh-Ladakh": [
+    "Pangong Tso lake",
+    "Nubra Valley & Diskit Monastery",
+    "Shanti Stupa",
+    "Leh Palace",
+    "Thiksey Monastery",
+    "Khardung La pass",
+    "Hemis Monastery",
+    "Magnetic Hill"
+  ,
+    "Tso Moriri lake",
+    "Lamayuru Moonland",
+    "Alchi Monastery",
+    "Hall of Fame Museum",
+    "Stok Palace",
+    "Spituk Monastery",
+    "Confluence at Sangam (Indus & Zanskar)",
+    "Chemrey Monastery",
+    "Leh Main Bazaar walk",
+    "Hunder sand dunes camel safari",
+    "Turtuk Village (Balti culture)",
+    "Pangong Lake camping",
+    "Khardung La biking & ATV ride",
+    "Pashmina & handicraft shopping at Leh Market"
+  
+  ],
+  "Varanasi": [
+    "Dashashwamedh Ghat Ganga aarti",
+    "Sunrise boat ride past the ghats",
+    "Kashi Vishwanath Temple",
+    "Manikarnika Ghat",
+    "Sarnath (Dhamek Stupa)",
+    "Banaras Hindu University",
+    "Assi Ghat",
+    "Blue Lassi shop in the old city"
+  ,
+    "Tulsi Manas Temple",
+    "Ramnagar Fort across the Ganga",
+    "Bharat Mata Mandir",
+    "Durga Kund Temple",
+    "Chunar Fort day trip",
+    "Banaras silk weavers in Madanpura",
+    "Tibetan Temple Sarnath",
+    "Subah-e-Banaras at Assi Ghat",
+    "Kachori Gali food trail",
+    "Vishwanath Gali silk & souvenirs shopping",
+    "Madanpura Banarasi saree weaving workshop"
+  
+  ],
+  "Mumbai": [
+    "Gateway of India",
+    "Marine Drive at sunset",
+    "Elephanta Caves",
+    "Chhatrapati Shivaji Terminus",
+    "Colaba Causeway shopping",
+    "Bandra Bandstand",
+    "Dharavi walking tour",
+    "Sanjay Gandhi National Park"
+  ,
+    "Haji Ali Dargah",
+    "Crawford Market",
+    "Chor Bazaar antiques",
+    "Worli Sea Link drive",
+    "Juhu Beach pav bhaji",
+    "Siddhivinayak Temple",
+    "Kanheri Caves",
+    "Global Vipassana Pagoda"
+  ],
+  "Bangalore": [
+    "Bangalore Palace",
+    "Lalbagh Botanical Garden",
+    "Cubbon Park",
+    "Tipu Sultan's Summer Palace",
+    "Vidhana Soudha",
+    "Commercial Street & MG Road",
+    "Bull Temple (Dodda Basavana Gudi)",
+    "Indiranagar craft beer trail (100ft Road)"
+  ,
+    "ISKCON Temple",
+    "Nandi Hills sunrise",
+    "Ulsoor Lake boating",
+    "Bannerghatta National Park",
+    "HAL Aerospace Museum",
+    "Innovative Film City",
+    "Devanahalli Fort",
+    "Big Banyan Tree at Kethohalli",
+    "UB City Mall luxury shopping",
+    "Brigade Road MG Road walk",
+    "Wonderla Amusement Park rides & water games",
+    "National Gallery of Modern Art Bangalore",
+    "Indiranagar café hopping",
+    "Orion Mall Brigade Gateway",
+    "Amoeba bowling & arcade Church Street",
+    "Cycling at Lalbagh"
+  
+  
+  ],
+  "Chiang Mai": [
+    "Doi Suthep temple",
+    "Old City wat trail (Wat Chedi Luang, Wat Phra Singh)",
+    "Sunday Walking Street",
+    "Elephant Nature Park sanctuary",
+    "Sticky Waterfalls (Bua Tong)",
+    "Doi Inthanon National Park",
+    "Warorot Market",
+    "Nimmanhaemin café district"
+  ,
+    "Wat Umong forest temple",
+    "Mae Sa Waterfall",
+    "Bo Sang umbrella village",
+    "Queen Sirikit Botanic Garden",
+    "Huay Tung Tao Lake",
+    "Doi Pui Hmong village",
+    "Wiang Kum Kam ruins",
+    "Chiang Mai Night Bazaar"
+  ],
+  "Bangkok": [
+    "Grand Palace & Wat Phra Kaew",
+    "Wat Pho reclining Buddha",
+    "Wat Arun",
+    "Chatuchak Weekend Market",
+    "Khao San Road",
+    "Sky Bar at Lebua",
+    "Chinatown (Yaowarat) street food",
+    "Jim Thompson House"
+  ,
+    "MBK Center & Siam Square",
+    "Asiatique Riverfront",
+    "Lumpini Park morning",
+    "Erawan Shrine",
+    "Wat Saket (Golden Mount)",
+    "Talad Rot Fai vintage market",
+    "Madame Tussauds Bangkok",
+    "Dusit Palace & Vimanmek"
+  ],
+  "Phuket": [
+    "Big Buddha of Phuket",
+    "Phi Phi Islands day trip",
+    "Old Phuket Town Sino-Portuguese streets",
+    "Patong Beach & Bangla Road",
+    "Promthep Cape sunset",
+    "Wat Chalong",
+    "Phang Nga Bay (James Bond Island)",
+    "Kata Beach"
+  ,
+    "Karon Viewpoint",
+    "Phuket FantaSea show",
+    "Bangla Walking Street night",
+    "Banana Beach hidden cove",
+    "Sirinat National Park",
+    "Phuket Trickeye Museum",
+    "Coral Island day trip",
+    "Khao Rang Hill park"
+  ],
+  "Krabi & Railay": [
+    "Railay Beach climbing",
+    "Phra Nang Cave Beach",
+    "Four Islands longtail tour",
+    "Tiger Cave Temple (Wat Tham Suea)",
+    "Emerald Pool & Hot Springs",
+    "Ao Nang night market",
+    "Hong Islands kayaking",
+    "Koh Poda snorkel"
+  ,
+    "Diamond Cave Railay",
+    "Klong Thom hot stream",
+    "Crystal Pool (Sa Morakot)",
+    "Khao Khanab Nam caves",
+    "Koh Lanta day trip",
+    "Bamboo Island snorkel",
+    "Tup Island sandbar",
+    "Ao Thalane mangrove kayak"
+  ],
+  "Koh Samui": [
+    "Big Buddha (Wat Phra Yai)",
+    "Chaweng Beach",
+    "Fisherman's Village Bophut",
+    "Ang Thong Marine Park day trip",
+    "Na Muang Waterfall",
+    "Hin Ta & Hin Yai rocks",
+    "Lamai Beach",
+    "Koh Phangan Full Moon Party"
+  ,
+    "Secret Buddha Garden",
+    "Wat Plai Laem",
+    "Mummified Monk at Wat Khunaram",
+    "Coral Cove",
+    "Magic Garden of Buddha",
+    "Maenam Beach sunset",
+    "Bophut Friday night market",
+    "Koh Tao snorkel day trip"
+  ],
+  "Pai": [
+    "Pai Canyon sunset",
+    "Tha Pai Hot Springs",
+    "Pam Bok Waterfall",
+    "Pai Walking Street night market",
+    "Yun Lai Viewpoint",
+    "Mo Paeng Waterfall",
+    "Land Split fruit farm",
+    "Wat Phra That Mae Yen"
+  ,
+    "Pai Memorial Bridge (WWII)",
+    "Santichon Chinese village",
+    "Coffee in Love viewpoint",
+    "Bamboo Bridge (Boon Ko Ku So)",
+    "Pai Hot Springs Resort",
+    "Nam Lod Cave (Soppong)",
+    "Pong Duead hot springs",
+    "Pai Circus School fire show"
+  ],
+  "Ayutthaya": [
+    "Wat Mahathat (Buddha head in tree)",
+    "Wat Chaiwatthanaram",
+    "Wat Phra Si Sanphet",
+    "Bang Pa-In Royal Palace",
+    "Ayutthaya Floating Market",
+    "Wat Yai Chaimongkhon",
+    "Chao Sam Phraya Museum",
+    "Sunset boat tour around the island"
+  ,
+    "Wat Lokayasutharam reclining Buddha",
+    "Wat Ratchaburana",
+    "Wat Phanan Choeng",
+    "Bang Pa-In Royal Palace",
+    "Ayutthaya Floating Market",
+    "Wat Yai Chaimongkhon",
+    "Chao Sam Phraya Museum",
+    "Sunset boat tour around the island"
+  ],
+  "Rome": [
+    "Colosseum & Roman Forum",
+    "Vatican Museums & Sistine Chapel",
+    "Trevi Fountain",
+    "Pantheon",
+    "Trastevere neighborhood dinner",
+    "Borghese Gallery",
+    "Piazza Navona",
+    "Campo de' Fiori market"
+  ,
+    "Castel Sant'Angelo",
+    "Spanish Steps & Piazza di Spagna",
+    "Catacombs of San Callisto",
+    "Aventine Hill Keyhole",
+    "Villa Borghese gardens",
+    "Appian Way bike ride",
+    "Testaccio food market",
+    "Mouth of Truth (Bocca della Verità)"
+  ],
+  "Florence": [
+    "Uffizi Gallery",
+    "Duomo & Brunelleschi's Dome",
+    "Ponte Vecchio",
+    "Piazzale Michelangelo sunset",
+    "Accademia (David)",
+    "Mercato Centrale",
+    "Boboli Gardens",
+    "Santa Croce Basilica"
+  ,
+    "Bargello Museum",
+    "Pitti Palace",
+    "Santa Maria Novella",
+    "Oltrarno artisan district",
+    "San Miniato al Monte",
+    "Mercato di Sant'Ambrogio",
+    "Fiesole hilltop",
+    "Vasari Corridor"
+  ],
+  "Venice": [
+    "St Mark's Basilica & Piazza San Marco",
+    "Doge's Palace",
+    "Rialto Bridge & Market",
+    "Gondola ride through Cannaregio",
+    "Murano & Burano islands",
+    "Peggy Guggenheim Collection",
+    "Libreria Acqua Alta",
+    "Cicchetti bar crawl in Dorsoduro"
+  ,
+    "Scuola Grande di San Rocco",
+    "Frari Basilica",
+    "Lido di Venezia beach",
+    "Torcello island",
+    "Castello sestiere walk",
+    "Ca' Rezzonico",
+    "Bridge of Sighs",
+    "Jewish Ghetto in Cannaregio"
+  ],
+  "Amalfi Coast": [
+    "Positano cliffside village",
+    "Path of the Gods hike",
+    "Amalfi town & Duomo",
+    "Ravello (Villa Cimbrone gardens)",
+    "Capri & Blue Grotto day trip",
+    "Praiano sunset at Africana Bar",
+    "Atrani hidden cove",
+    "Emerald Grotto (Grotta dello Smeraldo)"
+  ,
+    "Furore fjord",
+    "Marina di Praia beach",
+    "Vietri sul Mare ceramics",
+    "Fiordo di Crapolla hike",
+    "Conca dei Marini",
+    "Punta Campanella nature reserve",
+    "Tramonti wine country",
+    "Salerno old town"
+  ],
+  "Cinque Terre": [
+    "Vernazza harbour",
+    "Manarola sunset viewpoint",
+    "Sentiero Azzurro coastal trail",
+    "Monterosso al Mare beach",
+    "Riomaggiore",
+    "Corniglia hilltop village",
+    "Nessun Dorma aperitivo (Manarola)",
+    "Punta Bonfiglio viewpoint"
+  ,
+    "Volastra hilltop village",
+    "Beccara high trail",
+    "Levanto beach (gateway town)",
+    "Portovenere day trip",
+    "Sentiero Rosso ridge trail",
+    "Spiaggia di Guvano (Corniglia)",
+    "Castello Doria Vernazza",
+    "Manarola vineyards walk"
+  ],
+  "Milan": [
+    "Duomo di Milano rooftop",
+    "Galleria Vittorio Emanuele II",
+    "Last Supper at Santa Maria delle Grazie",
+    "Navigli canals aperitivo",
+    "Brera district",
+    "Sforza Castle",
+    "Quadrilatero della Moda shopping",
+    "San Siro stadium"
+  ,
+    "Pinacoteca di Brera",
+    "Bosco Verticale",
+    "Cimitero Monumentale",
+    "Parco Sempione",
+    "10 Corso Como",
+    "Fondazione Prada",
+    "Porta Nuova skyline",
+    "Como day trip from Milan"
+  ],
+  "Sicily (Palermo & Taormina)": [
+    "Valley of the Temples (Agrigento)",
+    "Mount Etna hike",
+    "Teatro Antico di Taormina",
+    "Ballarò Market in Palermo",
+    "Cattedrale di Monreale",
+    "Isola Bella Taormina",
+    "Palazzo dei Normanni",
+    "Cefalù old town"
+  ,
+    "Capuchin Catacombs Palermo",
+    "Quattro Canti",
+    "Mondello Beach",
+    "Cathedral of Palermo",
+    "Castelmola hilltop",
+    "Alcantara Gorge",
+    "Erice medieval village",
+    "Siracusa Ortigia day trip"
+  ],
+  "Lake Como": [
+    "Bellagio village",
+    "Villa del Balbianello",
+    "Varenna lakeside",
+    "Villa Carlotta gardens",
+    "Como funicular to Brunate",
+    "Tremezzo lakefront",
+    "Lecco hiking",
+    "Isola Comacina lunch"
+  ,
+    "Cernobbio promenade",
+    "Greenway del Lago di Como walk",
+    "Menaggio waterfront",
+    "Villa Olmo Como",
+    "Pian del Tivano caves",
+    "Argegno cable car to Pigra",
+    "Domaso windsurfing",
+    "Lugano day trip"
+  ],
+  "Paris": [
+    "Eiffel Tower & Champ de Mars",
+    "Louvre Museum",
+    "Notre-Dame & Île de la Cité",
+    "Montmartre & Sacré-Cœur",
+    "Musée d'Orsay",
+    "Le Marais district",
+    "Seine sunset cruise",
+    "Père Lachaise Cemetery"
+  ,
+    "Sainte-Chapelle stained glass",
+    "Palais Garnier opera tour",
+    "Canal Saint-Martin",
+    "Catacombs of Paris",
+    "Rodin Museum garden",
+    "Musée de l'Orangerie (Monet's Water Lilies)",
+    "Belleville street art walk",
+    "Versailles day trip"
+  ],
+  "Nice & French Riviera": [
+    "Promenade des Anglais",
+    "Vieux Nice old town",
+    "Castle Hill (Colline du Château)",
+    "Èze cliffside village",
+    "Monaco day trip",
+    "Cours Saleya market",
+    "Cap Ferrat coastal walk",
+    "Antibes Picasso Museum"
+  ,
+    "Matisse Museum Cimiez",
+    "Place Massena",
+    "Russian Cathedral",
+    "Villefranche-sur-Mer",
+    "Saint-Paul-de-Vence village",
+    "Fondation Maeght",
+    "Grasse perfume town",
+    "Cannes Croisette"
+  ],
+  "Provence (Aix & Avignon)": [
+    "Palais des Papes (Avignon)",
+    "Pont du Gard Roman aqueduct",
+    "Cours Mirabeau in Aix",
+    "Sénanque Abbey lavender fields",
+    "Gordes hilltop village",
+    "Carrières de Lumières (Les Baux)",
+    "Roussillon ochre cliffs",
+    "Marché de Forville"
+  ,
+    "Cézanne's Atelier (Aix)",
+    "Mont Sainte-Victoire hike",
+    "Roussillon ochre trail",
+    "Châteauneuf-du-Pape vineyards",
+    "Isle-sur-la-Sorgue antique market",
+    "Calanques de Cassis",
+    "Saint-Rémy-de-Provence Van Gogh sites",
+    "Camargue flamingo park"
+  ],
+  "Lyon": [
+    "Basilique de Fourvière",
+    "Vieux Lyon traboules walk",
+    "Les Halles de Lyon Paul Bocuse",
+    "Parc de la Tête d'Or",
+    "Place Bellecour",
+    "Croix-Rousse silk district",
+    "Confluence Museum",
+    "Bouchon dinner on Rue Mercière"
+  ,
+    "Musée des Beaux-Arts",
+    "Roman Theatre of Fourvière",
+    "Halle Tony Garnier",
+    "Place des Terreaux & City Hall",
+    "Gadagne museums",
+    "Île Barbe",
+    "Pérouges medieval village",
+    "Beaujolais wine day trip"
+  ],
+  "Chamonix": [
+    "Aiguille du Midi cable car",
+    "Mer de Glace glacier",
+    "Mont Blanc Tunnel viewpoint",
+    "Lac Blanc hike",
+    "Brévent–Flégère ski lifts",
+    "Chamonix town centre",
+    "Tramway du Mont-Blanc",
+    "Les Houches Alpine museum"
+  ,
+    "Mont Blanc Skyway (Italian side)",
+    "Plan de l'Aiguille",
+    "La Mer de Glace train (Montenvers)",
+    "Argentière glacier hike",
+    "Lac des Gaillands",
+    "Cosmiques Hut viewpoint",
+    "Servoz village",
+    "Annecy day trip"
+  ],
+  "Bordeaux": [
+    "Place de la Bourse & Miroir d'Eau",
+    "La Cité du Vin",
+    "Saint-André Cathedral",
+    "Rue Sainte-Catherine",
+    "Saint-Émilion vineyards day trip",
+    "Marché des Capucins",
+    "Darwin Ecosystem",
+    "Dune du Pilat day trip"
+  ,
+    "Place des Quinconces",
+    "Bassins des Lumières art space",
+    "Pey-Berland Tower",
+    "Médoc wine route",
+    "Arcachon Bay oysters",
+    "Saint-Pierre old quarter",
+    "Pessac-Léognan vineyards",
+    "Blaye Citadel ferry"
+  ],
+  "Étretat & Normandy": [
+    "Falaises d'Étretat (the arches)",
+    "Mont Saint-Michel",
+    "Bayeux Tapestry Museum",
+    "Omaha Beach & D-Day cemetery",
+    "Honfleur old harbour",
+    "Rouen Cathedral",
+    "Giverny (Monet's gardens)",
+    "Deauville boardwalk"
+  ,
+    "Étretat clifftop golf walk",
+    "Caen Memorial WWII",
+    "Calvados distillery tour (Pays d'Auge)",
+    "Pointe du Hoc battlefield",
+    "Cabourg seafront",
+    "Falaise Castle (William the Conqueror)",
+    "Lyons-la-Forêt village",
+    "Le Havre modernist UNESCO"
+  ],
+  "Barcelona": [
+    "Sagrada Família",
+    "Park Güell",
+    "La Rambla & La Boqueria Market",
+    "Gothic Quarter (Barri Gòtic)",
+    "Casa Batlló",
+    "Bunkers del Carmel viewpoint",
+    "Barceloneta Beach",
+    "Picasso Museum"
+  ,
+    "Camp Nou & FC Barcelona Museum",
+    "Montjuïc Magic Fountain",
+    "Tibidabo amusement park",
+    "El Born district",
+    "Casa Vicens",
+    "Hospital de Sant Pau",
+    "Passeig de Gràcia modernism",
+    "Sitges day trip"
+  ],
+  "Madrid": [
+    "Prado Museum",
+    "Reina Sofía (Guernica)",
+    "Retiro Park & Crystal Palace",
+    "Plaza Mayor",
+    "Mercado de San Miguel",
+    "Royal Palace of Madrid",
+    "Gran Vía & Malasaña tapas",
+    "Sobrino de Botín dinner"
+  ,
+    "Thyssen-Bornemisza Museum",
+    "Templo de Debod sunset",
+    "Lavapiés multicultural quarter",
+    "Chamberí ghost station",
+    "Mercado de Antón Martín",
+    "El Rastro flea market",
+    "Toledo day trip",
+    "Segovia day trip (Roman aqueduct)"
+  ],
+  "Seville": [
+    "Real Alcázar",
+    "Seville Cathedral & La Giralda",
+    "Plaza de España",
+    "Triana flamenco neighborhood",
+    "Metropol Parasol (Las Setas)",
+    "Barrio Santa Cruz",
+    "Casa de Pilatos",
+    "Tapas crawl on Calle Mateos Gago"
+  ,
+    "Torre del Oro",
+    "Hospital de los Venerables",
+    "Itálica Roman ruins",
+    "Archivo de Indias",
+    "Hospital de la Caridad",
+    "Jardines de Murillo",
+    "Carmona day trip",
+    "Cádiz day trip"
+  ],
+  "Granada": [
+    "Alhambra & Generalife",
+    "Albaicín old quarter",
+    "Mirador San Nicolás sunset",
+    "Sacromonte cave flamenco",
+    "Granada Cathedral & Royal Chapel",
+    "Hammam Al Ándalus",
+    "Calle Navas tapas trail",
+    "Sierra Nevada day trip"
+  ,
+    "Carthusian Monastery (La Cartuja)",
+    "Carrera del Darro walk",
+    "Mirador de San Cristóbal",
+    "Bañuelo Arab baths",
+    "Corral del Carbón",
+    "Museo Cuevas del Sacromonte",
+    "Guadix cave houses day trip",
+    "Las Alpujarras villages"
+  ],
+  "San Sebastián": [
+    "La Concha Beach",
+    "Parte Vieja pintxos crawl",
+    "Monte Igueldo funicular",
+    "Monte Urgull walk",
+    "Peine del Viento sculptures",
+    "Mercado de la Bretxa",
+    "Zurriola Beach surf",
+    "Restaurante Arzak"
+  ,
+    "Aquarium Donostia",
+    "Tabakalera cultural centre",
+    "Txillida Leku museum",
+    "Hondarribia old town",
+    "Jaizkibel coastal drive",
+    "Pasaia harbour",
+    "Getaria fishing village",
+    "Bilbao day trip (Guggenheim)"
+  ],
+  "Ibiza": [
+    "Dalt Vila old town",
+    "Cala Comte sunset",
+    "Es Vedrà viewpoint",
+    "Café del Mar Sant Antoni",
+    "Pacha & Ushuaïa clubs",
+    "Las Salinas Beach",
+    "Hippy Market Punta Arabí",
+    "Formentera day trip"
+  ,
+    "Ses Salines salt flats",
+    "Punta Galera flat rocks",
+    "Santa Gertrudis village",
+    "Aguas Blancas nudist beach",
+    "Sant Carles hippy market",
+    "Atlantis (Sa Pedrera)",
+    "Cala Salada",
+    "Es Cavallet beach"
+  ],
+  "Mallorca": [
+    "Palma Cathedral (La Seu)",
+    "Serra de Tramuntana drive",
+    "Valldemossa village",
+    "Cap de Formentor",
+    "Sóller train ride",
+    "Port d'Andratx",
+    "Cala Mondragó",
+    "Bellver Castle"
+  ,
+    "Caves of Drach",
+    "Deià writers' village",
+    "Pollença stone steps",
+    "Es Trenc beach",
+    "Banyalbufar terraces",
+    "Sa Calobra drive",
+    "Alcudia Roman ruins",
+    "Cap de ses Salines lighthouse"
+  ],
+  "Santorini": [
+    "Oia sunset viewpoint",
+    "Fira to Oia caldera hike",
+    "Red Beach",
+    "Akrotiri archaeological site",
+    "Amoudi Bay seafood tavernas",
+    "Santo Wines tasting",
+    "Ancient Thera",
+    "Black Beach Perissa"
+  ,
+    "Pyrgos hilltop village",
+    "Megalochori traditional village",
+    "Kamari black-sand beach",
+    "Skaros Rock hike",
+    "Catamaran caldera cruise",
+    "Vlychada moonscape beach",
+    "Emporio old quarter",
+    "Profitis Ilias monastery"
+  ],
+  "Athens": [
+    "Acropolis & Parthenon",
+    "Acropolis Museum",
+    "Plaka old quarter",
+    "Ancient Agora",
+    "Mount Lycabettus sunset",
+    "Monastiraki Flea Market",
+    "Temple of Olympian Zeus",
+    "Anafiotika neighborhood"
+  ,
+    "Panathenaic Stadium",
+    "National Archaeological Museum",
+    "Kerameikos cemetery",
+    "Roman Agora & Tower of the Winds",
+    "Filopappou Hill",
+    "Cape Sounion (Temple of Poseidon) day trip",
+    "Aegina island day trip",
+    "Stavros Niarchos Foundation"
+  ],
+  "Mykonos": [
+    "Little Venice waterfront",
+    "Mykonos Windmills",
+    "Paradise Beach club",
+    "Delos archaeological site",
+    "Chora old town alleys",
+    "Paraportiani Church",
+    "Scorpios beach club",
+    "Ano Mera village"
+  ,
+    "Agios Sostis Beach",
+    "Armenistis Lighthouse",
+    "Panagia Tourliani Monastery",
+    "Lia Beach",
+    "Houlakia hidden bay",
+    "Fokos Tavern beach",
+    "Rhenia island swim stop",
+    "Kalafati windsurf"
+  ],
+  "Crete": [
+    "Knossos Palace",
+    "Samaria Gorge hike",
+    "Elafonissi pink-sand beach",
+    "Chania old Venetian harbour",
+    "Balos Lagoon",
+    "Heraklion Archaeological Museum",
+    "Rethymno old town",
+    "Spinalonga island"
+  ,
+    "Phaistos Disc site",
+    "Lassithi Plateau windmills",
+    "Preveli Palm Beach",
+    "Loutro car-free village",
+    "Imbros Gorge hike",
+    "Vai palm forest beach",
+    "Arkadi Monastery",
+    "Kournas Lake"
+  ],
+  "Naxos": [
+    "Portara of Naxos",
+    "Plaka Beach",
+    "Apollonas kouros statue",
+    "Halki village distillery",
+    "Mount Zas hike",
+    "Apeiranthos marble village",
+    "Agia Anna fishing harbour",
+    "Mikri Vigla kitesurfing"
+  ,
+    "Chora Castle (Kastro)",
+    "Filoti village",
+    "Bourgos old neighborhood",
+    "Demeter's Temple Sangri",
+    "Roman aqueduct Melanes",
+    "Moutsouna fishing port",
+    "Panagia Drosiani church",
+    "Koronos mountain hike"
+  ],
+  "Meteora": [
+    "Great Meteoron Monastery",
+    "Roussanou Monastery",
+    "Varlaam Monastery",
+    "Holy Trinity Monastery (Agia Triada)",
+    "St Stephen's Monastery",
+    "Kalambaka old town",
+    "Sunset rock viewpoint",
+    "Theopetra Cave"
+  ,
+    "Doupiani Rock viewpoint",
+    "Theopetra archaeological cave",
+    "Pyli stone bridge day trip",
+    "Pertouli plateau",
+    "Trikala old town",
+    "Aspropotamos river valley",
+    "Pindus mountain hike",
+    "Vlachava village"
+  ],
+  "Bali (Ubud)": [
+    "Tegallalang Rice Terraces",
+    "Sacred Monkey Forest Sanctuary",
+    "Tirta Empul water temple",
+    "Campuhan Ridge Walk",
+    "Ubud Palace & Saraswati Temple",
+    "Goa Gajah (Elephant Cave)",
+    "Tegenungan Waterfall",
+    "Ubud Art Market"
+  ,
+    "Bali Swing experience",
+    "Pura Gunung Kawi rock-cut shrines",
+    "Ubud Monkey Forest sunrise",
+    "Kanto Lampo waterfall",
+    "Tukad Cepung waterfall (light beam)",
+    "ARMA Museum",
+    "Blanco Renaissance Museum",
+    "Bali Bird Park"
+  ],
+  "Bali (Canggu & Seminyak)": [
+    "Echo Beach Canggu",
+    "Tanah Lot temple at sunset",
+    "La Brisa beach club",
+    "Seminyak Square shopping",
+    "Berawa Beach surf",
+    "Old Man's surf bar",
+    "Petitenget Beach",
+    "La Plancha sunset bar"
+  ,
+    "Pererenan Beach",
+    "Finns Beach Club",
+    "Atlas Beach Fest",
+    "Batu Bolong temple by the sea",
+    "Pura Tanah Lot Sunset Terrace",
+    "Potato Head Beach Club",
+    "Mrs Sippy Bali pool club",
+    "Devil's Tear Lembongan day trip"
+  ],
+  "Bali (Uluwatu)": [
+    "Uluwatu Temple Kecak fire dance",
+    "Padang Padang Beach",
+    "Single Fin sunset Sundays",
+    "Suluban (Blue Point) Beach",
+    "Nyang Nyang Beach hike",
+    "Bingin Beach",
+    "Karma Beach Club",
+    "Melasti Beach"
+  ,
+    "Pandawa Beach statues",
+    "Green Bowl Beach",
+    "Sunday's Beach Club",
+    "Garuda Wisnu Kencana Park",
+    "Balangan Beach",
+    "Dreamland Beach",
+    "Thomas Beach (hidden)",
+    "Karma Kandara cliff lift"
+  ],
+  "Nusa Penida": [
+    "Kelingking Beach (T-Rex viewpoint)",
+    "Angel's Billabong",
+    "Broken Beach (Pasih Uug)",
+    "Crystal Bay snorkel with manta rays",
+    "Atuh Beach",
+    "Diamond Beach",
+    "Peguyangan Waterfall stairs",
+    "Tembeling Forest"
+  ,
+    "Saren Cliff Point",
+    "Rumah Pohon treehouse",
+    "Tembeling natural pool",
+    "Banah Cliff",
+    "Suwehan Beach",
+    "Goa Giri Putri cave temple",
+    "Manta Bay snorkel",
+    "Penida Colada beach bar"
+  ],
+  "Yogyakarta": [
+    "Borobudur Temple sunrise",
+    "Prambanan Temple",
+    "Kraton Sultan's Palace",
+    "Taman Sari Water Castle",
+    "Malioboro Street",
+    "Mount Merapi Jeep tour",
+    "Jomblang Cave",
+    "Ramayana ballet at Prambanan"
+  ,
+    "Plaosan twin temples",
+    "Sambisari buried temple",
+    "Gunung Kidul caves (Pindul)",
+    "Parangtritis black-sand beach",
+    "Imogiri royal cemetery",
+    "Kotagede silver workshops",
+    "Kalibiru viewpoint",
+    "Mendut Temple"
+  ],
+  "Komodo & Flores": [
+    "Komodo Island dragon trek",
+    "Padar Island viewpoint",
+    "Pink Beach Komodo",
+    "Manta Point snorkel",
+    "Kelimutu coloured crater lakes",
+    "Wae Rebo traditional village",
+    "Cunca Wulang waterfall",
+    "Labuan Bajo harbour"
+  ,
+    "Sebayur Island snorkel",
+    "Bidadari Island",
+    "Kanawa Island",
+    "Ende Mosque",
+    "Bena traditional village",
+    "Mbeling waterfall",
+    "Cunca Rami waterfall",
+    "Liang Bua Hobbit cave"
+  ],
+  "Lombok & Gili Islands": [
+    "Gili Trawangan sunset swing",
+    "Gili Meno turtle snorkel",
+    "Mount Rinjani trek",
+    "Tiu Kelep waterfall",
+    "Kuta Lombok beaches",
+    "Pink Beach (Tangsi)",
+    "Sembalun rice terraces",
+    "Mawun Beach"
+  ,
+    "Gili Air sunset bars",
+    "Senggigi Beach",
+    "Selong Belanak Beach",
+    "Benang Stokel waterfall",
+    "Tetebatu rice terraces",
+    "Pura Lingsar temple",
+    "Pura Batu Bolong",
+    "Sade Sasak village"
+  ],
+  "Reykjavik": [
+    "Hallgrímskirkja church",
+    "Sun Voyager sculpture",
+    "Harpa Concert Hall",
+    "Old Harbour whale watching",
+    "Blue Lagoon (en route)",
+    "Perlan museum",
+    "Laugavegur shopping street",
+    "Bæjarins Beztu Pylsur hot dog"
+  ,
+    "Settlement Exhibition",
+    "National Museum of Iceland",
+    "Tjörnin pond",
+    "Whales of Iceland exhibit",
+    "Árbær Open Air Museum",
+    "Viðey Island ferry",
+    "Esja mountain hike",
+    "Heiðmörk nature reserve"
+  ],
+  "Golden Circle": [
+    "Þingvellir National Park",
+    "Geysir & Strokkur",
+    "Gullfoss waterfall",
+    "Kerið crater lake",
+    "Secret Lagoon Fludir",
+    "Friðheimar tomato farm",
+    "Skálholt cathedral",
+    "Bruarfoss blue waterfall"
+  ,
+    "Hveragerði geothermal town",
+    "Reykjadalur hot river hike",
+    "Faxi waterfall",
+    "Sólheimar eco-village",
+    "Lake Thingvallavatn dive (Silfra)",
+    "Efstidalur II farm ice cream",
+    "Skálholt cathedral",
+    "Thorufoss waterfall"
+  ],
+  "South Coast (Vík)": [
+    "Reynisfjara black sand beach",
+    "Skógafoss waterfall",
+    "Seljalandsfoss waterfall",
+    "Sólheimajökull glacier hike",
+    "Dyrhólaey arch",
+    "Vík í Mýrdal village",
+    "Fjaðrárgljúfur canyon",
+    "DC-3 plane wreck"
+  ,
+    "Hjörleifshöfði cave (Yoda Cave)",
+    "Mýrdalsjökull glacier ATV",
+    "Kvernufoss hidden waterfall",
+    "Laufskálavarða lava cairns",
+    "Kötlujökull ice cave",
+    "Hjörleifshöfði promontory",
+    "Reynisdrangar sea stacks",
+    "Kerlingadalur valley"
+  ],
+  "Westfjords": [
+    "Dynjandi waterfall",
+    "Látrabjarg bird cliffs",
+    "Rauðasandur red-sand beach",
+    "Hornstrandir nature reserve",
+    "Ísafjörður town",
+    "Hellulaug natural hot pool",
+    "Patreksfjörður",
+    "Drangajökull glacier"
+  ,
+    "Suðureyri fishing village",
+    "Bíldudalur Sea Monster Museum",
+    "Garðar BA 64 shipwreck",
+    "Selárdalur sculpture park",
+    "Norðurfjörður remote farm",
+    "Krossneslaug seaside pool",
+    "Vigur island puffin tour",
+    "Reykhólar seaweed sauna"
+  ],
+  "Akureyri & North": [
+    "Goðafoss waterfall",
+    "Lake Mývatn",
+    "Dettifoss waterfall",
+    "Húsavík whale watching",
+    "Akureyri Botanical Garden",
+    "Námafjall geothermal area",
+    "Dimmuborgir lava field",
+    "Ásbyrgi canyon"
+  ,
+    "Krafla volcano caldera",
+    "Grjótagjá thermal cave",
+    "Hverfjall crater hike",
+    "Skútustaðagígar pseudo-craters",
+    "Forest Lagoon Akureyri",
+    "Mývatn Nature Baths",
+    "Grenjaðarstaður turf farm",
+    "Tröllaskagi peninsula drive"
+  ],
+  "Highlands (Landmannalaugar)": [
+    "Landmannalaugar hot springs",
+    "Laugavegur trail",
+    "Hekla volcano viewpoint",
+    "Þórsmörk valley",
+    "Ljótipollur crater",
+    "Háifoss waterfall",
+    "Eldgjá fissure",
+    "Maelifell volcano"
+  ,
+    "Brennisteinsalda volcano",
+    "Bláhnúkur (Blue Peak) hike",
+    "Frostastaðavatn lake",
+    "Strútslaug remote hot spring",
+    "Sigöldugljúfur canyon",
+    "Veiðivötn lake region",
+    "Aldeyjarfoss basalt waterfall",
+    "Kerlingarfjöll geothermal"
+  ],
+  "Mexico City": [
+    "Zócalo & Metropolitan Cathedral",
+    "Frida Kahlo Museum (Casa Azul)",
+    "Teotihuacán pyramids",
+    "Chapultepec Castle & Anthropology Museum",
+    "Coyoacán market",
+    "Xochimilco trajinera boats",
+    "Palacio de Bellas Artes",
+    "Roma Norte taco crawl"
+  ,
+    "Soumaya Museum",
+    "Lucha Libre at Arena Mexico",
+    "Bosque de Chapultepec",
+    "Templo Mayor ruins",
+    "San Ángel Saturday market",
+    "Mercado de Jamaica flowers",
+    "Polanco upscale walk",
+    "Casa Luis Barragán"
+  ],
+  "Tulum": [
+    "Tulum Mayan Ruins",
+    "Gran Cenote",
+    "Cenote Dos Ojos",
+    "Sian Ka'an Biosphere",
+    "Playa Paraíso",
+    "Coba ruins & Nohoch Mul pyramid",
+    "Azulik beach club",
+    "Tulum Pueblo street food"
+  ,
+    "Akumal turtle snorkel",
+    "Cenote Calavera",
+    "Muyil Lagoon float",
+    "Cobá ruins bike ride",
+    "Tulum Beach Road clubs",
+    "Cenote Cristal",
+    "Aldea Zama",
+    "Bahía Soliman swim"
+  ],
+  "Oaxaca": [
+    "Monte Albán ruins",
+    "Hierve el Agua petrified waterfalls",
+    "Mercado 20 de Noviembre (mole)",
+    "Templo de Santo Domingo",
+    "Mitla archaeological site",
+    "Teotitlán del Valle weavers",
+    "Mezcal palenque tour",
+    "Oaxaca Ethnobotanical Garden"
+  ,
+    "Yagul archaeological site",
+    "Tule Tree (world's widest)",
+    "San Bartolo Coyotepec black pottery",
+    "Iglesia de San Felipe Neri",
+    "Mercado Benito Juárez",
+    "Capulalpam de Méndez mountain town",
+    "Cuilápam de Guerrero monastery",
+    "Tlacolula Sunday market"
+  ],
+  "Playa del Carmen & Cozumel": [
+    "Quinta Avenida (5th Ave)",
+    "Playacar beaches",
+    "Cozumel reef snorkel/dive",
+    "Xcaret eco park",
+    "Cenote Chaak Tun",
+    "Punta Sur Cozumel",
+    "Mamita's Beach Club",
+    "Akumal turtle bay"
+  ,
+    "Tulum ruins day trip",
+    "Xcaret eco park",
+    "Xelha snorkel park",
+    "Punta Sur Eco Park",
+    "Mayan Cacao Company tour",
+    "Cenote Azul",
+    "Isla Mujeres day trip",
+    "Cozumel Pearl Farm"
+  ],
+  "Sayulita": [
+    "Sayulita main beach surf",
+    "Playa de los Muertos",
+    "San Pancho village",
+    "Marietas Islands hidden beach",
+    "Monkey Mountain (Cerro del Mono)",
+    "Surf school at La Lancha",
+    "Yelapa waterfall day trip",
+    "Sayulita farmers market"
+  ,
+    "San Pancho beach (next village)",
+    "Marietas Islands hidden beach",
+    "Sayulita Saturday Market",
+    "Punta de Mita lighthouse",
+    "Sayulita yoga shala sunrise",
+    "Playa Carricitos",
+    "Don Pedro's beach club",
+    "El Mariachi Yelapa boat"
+  ],
+  "San Miguel de Allende": [
+    "Parroquia de San Miguel Arcángel",
+    "Fabrica La Aurora",
+    "Rosewood rooftop sunset",
+    "Jardín Allende plaza",
+    "El Charco del Ingenio botanical garden",
+    "Mercado de Artesanías",
+    "Atotonilco Sanctuary",
+    "Mineral de Pozos day trip"
+  ],
+  "Cancún": [
+    "Playa Delfines",
+    "Isla Mujeres ferry & Playa Norte",
+    "Chichén Itzá day trip",
+    "Cenote Ik Kil",
+    "Xel-Há park",
+    "Coco Bongo nightclub",
+    "Mercado 28",
+    "Museo Maya de Cancún"
+  ],
+  "Marrakech": [
+    "Jemaa el-Fna square",
+    "Bahia Palace",
+    "Majorelle Garden & YSL Museum",
+    "Koutoubia Mosque",
+    "Souks of the medina",
+    "Ben Youssef Madrasa",
+    "Le Jardin Secret",
+    "Atlas Mountains day trip (Imlil)"
+  ],
+  "Fes": [
+    "Fes el Bali medina",
+    "Chouara Tannery",
+    "Al Quaraouiyine (oldest university)",
+    "Bab Boujloud (Blue Gate)",
+    "Bou Inania Madrasa",
+    "Mellah Jewish quarter",
+    "Borj Sud sunset viewpoint",
+    "Volubilis Roman ruins day trip"
+  ],
+  "Chefchaouen": [
+    "Plaza Uta el-Hammam",
+    "Kasbah Museum",
+    "Ras El Maa waterfall",
+    "Spanish Mosque sunset hike",
+    "Talassemtane National Park",
+    "Akchour waterfalls",
+    "Old Medina blue alleys",
+    "Plaza El Haouta"
+  ],
+  "Sahara (Merzouga)": [
+    "Erg Chebbi dunes camel trek",
+    "Berber desert camp under the stars",
+    "Khamlia Gnawa music village",
+    "Dayet Srji oasis lake",
+    "Sandboarding on the dunes",
+    "Todra Gorge day trip",
+    "Rissani Monday souk",
+    "Mifis old mining village"
+  ],
+  "Essaouira": [
+    "Skala de la Ville ramparts",
+    "Essaouira medina",
+    "Port of Essaouira",
+    "Plage d'Essaouira (kitesurfing)",
+    "Moulay Hassan Square",
+    "Sidi Mohammed ben Abdallah Museum",
+    "Diabat (Jimi Hendrix beach)",
+    "Argan oil cooperative"
+  ],
+  "Casablanca": [
+    "Hassan II Mosque",
+    "Corniche d'Aïn Diab",
+    "Old Medina of Casablanca",
+    "Rick's Café",
+    "Mahkama du Pacha",
+    "Morocco Mall",
+    "Habous Quarter",
+    "Notre-Dame de Lourdes Cathedral"
+  ],
+  "Hanoi": [
+    "Hoan Kiem Lake & Ngoc Son Temple",
+    "Old Quarter (36 streets)",
+    "Temple of Literature",
+    "Train Street coffee",
+    "Ho Chi Minh Mausoleum",
+    "Bia Hoi corner",
+    "Dong Xuan Market",
+    "Water puppet theatre"
+  ],
+  "Ha Long Bay": [
+    "Overnight cruise on Ha Long Bay",
+    "Sung Sot (Surprise) Cave",
+    "Ti Top Island viewpoint",
+    "Bai Tu Long Bay",
+    "Cat Ba Island & Lan Ha Bay",
+    "Kayaking in Luon Cave",
+    "Floating fishing village (Vung Vieng)",
+    "Hang Trinh Nu cave"
+  ],
+  "Hoi An": [
+    "Hoi An Ancient Town lanterns",
+    "Japanese Covered Bridge",
+    "An Bang Beach",
+    "My Son Sanctuary",
+    "Tra Que vegetable village",
+    "Cam Thanh coconut basket boat",
+    "Tailor a custom suit on Le Loi",
+    "Night market on An Hoi"
+  ],
+  "Sapa": [
+    "Mount Fansipan cable car",
+    "Cat Cat H'mong village",
+    "Muong Hoa Valley rice terraces",
+    "Ta Phin red Dao village",
+    "Ham Rong Mountain",
+    "Silver Waterfall (Thac Bac)",
+    "Lao Chai – Ta Van trek",
+    "Sapa Sunday market"
+  ],
+  "Ho Chi Minh City": [
+    "War Remnants Museum",
+    "Cu Chi Tunnels",
+    "Notre-Dame Cathedral Saigon",
+    "Ben Thanh Market",
+    "Bui Vien backpacker street",
+    "Independence Palace",
+    "Saigon Central Post Office",
+    "Bitexco Saigon Skydeck"
+  ],
+  "Phu Quoc": [
+    "Sao Beach",
+    "Phu Quoc Night Market (Dinh Cau)",
+    "VinWonders & Hon Thom cable car",
+    "Sunset Sanato Beach Club",
+    "Phu Quoc National Park",
+    "Ham Ninh fishing village",
+    "Suoi Tranh waterfall",
+    "Pearl farms tour"
+  ],
+  "Da Nang": [
+    "Marble Mountains",
+    "My Khe Beach",
+    "Dragon Bridge fire show",
+    "Ba Na Hills & Golden Bridge",
+    "Son Tra Peninsula (Lady Buddha)",
+    "Han Market",
+    "Hai Van Pass drive",
+    "APEC Park riverside"
+  ],
+  "Lisbon": [
+    "Belém Tower",
+    "Jerónimos Monastery",
+    "Tram 28 ride through Alfama",
+    "Castelo de São Jorge",
+    "Time Out Market Lisboa",
+    "Pastéis de Belém",
+    "Bairro Alto bars",
+    "LX Factory"
+  ],
+  "Porto": [
+    "Livraria Lello",
+    "Ribeira waterfront",
+    "Dom Luís I Bridge",
+    "Port wine cellars in Vila Nova de Gaia",
+    "Clérigos Tower",
+    "Bolhão Market",
+    "São Bento railway tiles",
+    "Douro Valley wine day trip"
+  ],
+  "Sintra": [
+    "Pena Palace",
+    "Quinta da Regaleira (Initiation Well)",
+    "Moorish Castle",
+    "Cabo da Roca",
+    "Monserrate Palace",
+    "Sintra National Palace",
+    "Praia da Adraga",
+    "Convento dos Capuchos"
+  ],
+  "Algarve (Lagos)": [
+    "Ponta da Piedade cliffs",
+    "Praia do Camilo",
+    "Benagil Cave kayak tour",
+    "Praia da Marinha",
+    "Lagos old town & marina",
+    "Sagres & Cape St. Vincent",
+    "Praia Dona Ana",
+    "Alvor boardwalk"
+  ],
+  "Madeira": [
+    "Pico do Arieiro to Pico Ruivo hike",
+    "Funchal Old Town & Mercado dos Lavradores",
+    "Cabo Girão skywalk",
+    "Levada do Caldeirão Verde",
+    "Porto Moniz natural pools",
+    "Câmara de Lobos",
+    "Monte Toboggan ride",
+    "Fanal Forest"
+  ],
+  "Azores (São Miguel)": [
+    "Sete Cidades twin lakes",
+    "Lagoa do Fogo",
+    "Furnas hot springs & cozido",
+    "Ponta Delgada old town",
+    "Caldeira Velha thermal pool",
+    "Gorreana tea plantation",
+    "Vila Franca islet",
+    "Salto do Cabrito waterfall"
+  ],
+  "Cusco": [
+    "Plaza de Armas Cusco",
+    "Sacsayhuamán fortress",
+    "San Pedro Market",
+    "Qorikancha (Sun Temple)",
+    "San Blas artisan quarter",
+    "Rainbow Mountain (Vinicunca) trek",
+    "Pisac ruins & market",
+    "Tipón terraces"
+  ],
+  "Machu Picchu & Sacred Valley": [
+    "Machu Picchu citadel",
+    "Huayna Picchu hike",
+    "Ollantaytambo ruins",
+    "Pisac Sunday market",
+    "Maras salt mines",
+    "Moray circular terraces",
+    "Aguas Calientes hot springs",
+    "Chinchero weaving village"
+  ],
+  "Lima": [
+    "Plaza Mayor & Cathedral",
+    "Miraflores Malecón",
+    "Larcomar cliffside",
+    "Barranco bohemian district",
+    "Larco Museum",
+    "Huaca Pucllana ruins",
+    "Mercado de Surquillo",
+    "Central or Maido tasting menu"
+  ],
+  "Arequipa & Colca Canyon": [
+    "Plaza de Armas Arequipa",
+    "Santa Catalina Monastery",
+    "Mirador Cruz del Cóndor (Colca)",
+    "Yanque hot springs",
+    "Misti Volcano viewpoint",
+    "Mundo Alpaca",
+    "San Camilo Market",
+    "Sabandía mill"
+  ],
+  "Lake Titicaca (Puno)": [
+    "Uros floating reed islands",
+    "Taquile Island",
+    "Amantaní homestay",
+    "Sillustani burial towers",
+    "Puno Cathedral",
+    "Llachón peninsula",
+    "Isla del Sol day trip",
+    "Puno Plaza de Armas"
+  ],
+  "Huacachina & Paracas": [
+    "Huacachina dune oasis",
+    "Sandboarding on Cerro Blanco",
+    "Ballestas Islands boat tour",
+    "Paracas National Reserve (Red Beach)",
+    "Nazca Lines flight",
+    "Tambo Colorado ruins",
+    "Ica wineries",
+    "El Catador pisco bodega"
+  ],
+  "Istanbul": [
+    "Hagia Sophia",
+    "Blue Mosque (Sultan Ahmed)",
+    "Topkapi Palace",
+    "Grand Bazaar",
+    "Bosphorus ferry cruise",
+    "Basilica Cistern",
+    "Galata Tower",
+    "Süleymaniye Mosque"
+  ],
+  "Cappadocia": [
+    "Hot-air balloon over Göreme",
+    "Göreme Open-Air Museum",
+    "Uçhisar Castle",
+    "Derinkuyu underground city",
+    "Pasabag Fairy Chimneys",
+    "Ihlara Valley hike",
+    "Avanos pottery village",
+    "Red Valley sunset hike"
+  ],
+  "Antalya & Lycian Coast": [
+    "Kaleiçi old town",
+    "Düden Waterfalls",
+    "Aspendos Roman theatre",
+    "Olympos & Chimaera flames",
+    "Kekova sunken city boat",
+    "Patara Beach",
+    "Konyaaltı Beach",
+    "Termessos ancient city"
+  ],
+  "Pamukkale": [
+    "Pamukkale travertine terraces",
+    "Hierapolis ruins",
+    "Cleopatra's Antique Pool",
+    "Hierapolis Archaeology Museum",
+    "Karahayit red springs",
+    "Laodicea ancient city",
+    "Kaklik Cave",
+    "Salda Lake day trip"
+  ],
+  "Bodrum": [
+    "Bodrum Castle (Museum of Underwater Archaeology)",
+    "Mausoleum of Halicarnassus",
+    "Bodrum Marina",
+    "Gümüşlük sunset seafood",
+    "Bitez Beach",
+    "Bodrum Amphitheatre",
+    "Yalıkavak Marina",
+    "Black Island (Karaada) boat"
+  ],
+  "Ephesus & Selçuk": [
+    "Ephesus ancient city (Library of Celsus)",
+    "Temple of Artemis",
+    "Basilica of St. John",
+    "House of the Virgin Mary",
+    "Şirince village",
+    "Ephesus Museum Selçuk",
+    "Isa Bey Mosque",
+    "Pamucak Beach"
+  ],
+  "Cairo & Giza": [
+    "Pyramids of Giza & the Sphinx",
+    "Egyptian Museum (Tahrir)",
+    "Khan el-Khalili Bazaar",
+    "Cairo Citadel & Mohamed Ali Mosque",
+    "Coptic Cairo (Hanging Church)",
+    "Saqqara step pyramid",
+    "Grand Egyptian Museum",
+    "Felucca on the Nile"
+  ],
+  "Luxor": [
+    "Karnak Temple",
+    "Luxor Temple",
+    "Valley of the Kings",
+    "Hatshepsut Temple (Deir el-Bahari)",
+    "Colossi of Memnon",
+    "Luxor Museum",
+    "Felucca to Banana Island",
+    "Hot-air balloon over the West Bank"
+  ],
+  "Aswan": [
+    "Philae Temple",
+    "Abu Simbel",
+    "Unfinished Obelisk",
+    "Nubian village (Gharb Soheil)",
+    "Aswan High Dam",
+    "Elephantine Island",
+    "Kitchener's Island botanical garden",
+    "Felucca around Aswan"
+  ],
+  "Sharm el-Sheikh": [
+    "Ras Mohammed National Park snorkel",
+    "Naama Bay",
+    "Tiran Island boat trip",
+    "SOHO Square",
+    "Shark's Bay diving",
+    "Sinai Mountain (Mt Sinai sunrise)",
+    "Old Market Sharm",
+    "Saint Catherine's Monastery"
+  ],
+  "Dahab": [
+    "Blue Hole dive site",
+    "Three Pools snorkel",
+    "Dahab Lighthouse reef",
+    "Bedouin dinner at Wadi Gnai",
+    "Ras Abu Galum trek",
+    "Mount Sinai sunrise",
+    "Coloured Canyon",
+    "Lagoon kitesurfing"
+  ],
+  "Nile cruise (Luxor → Aswan)": [
+    "Edfu Temple of Horus",
+    "Kom Ombo double temple",
+    "Esna Lock passage",
+    "Karnak & Luxor temples",
+    "Valley of the Kings",
+    "Philae Temple in Aswan",
+    "Abu Simbel",
+    "Nubian village visit"
+  ],
+  "Sydney": [
+    "Sydney Opera House",
+    "Sydney Harbour Bridge climb",
+    "Bondi to Coogee coastal walk",
+    "Royal Botanic Garden",
+    "Taronga Zoo",
+    "Manly Beach ferry",
+    "The Rocks weekend market",
+    "Blue Mountains (Three Sisters) day trip"
+  ],
+  "Melbourne": [
+    "Federation Square",
+    "Hosier Lane street art",
+    "Queen Victoria Market",
+    "Royal Botanic Gardens",
+    "St Kilda Beach & Luna Park",
+    "Brighton Bathing Boxes",
+    "MCG (Melbourne Cricket Ground)",
+    "Great Ocean Road day trip (Twelve Apostles)"
+  ],
+  "Great Barrier Reef (Cairns)": [
+    "Outer reef snorkel from Cairns",
+    "Green Island day trip",
+    "Daintree Rainforest",
+    "Kuranda Skyrail",
+    "Fitzroy Island",
+    "Cape Tribulation",
+    "Cairns Esplanade Lagoon",
+    "Mossman Gorge"
+  ],
+  "Uluru & Red Centre": [
+    "Uluru base walk",
+    "Kata Tjuta (Valley of the Winds)",
+    "Field of Light installation",
+    "Sounds of Silence dinner",
+    "Kings Canyon Rim Walk",
+    "Cultural Centre Uluru",
+    "Uluru sunrise viewing platform",
+    "Standley Chasm"
+  ],
+  "Tasmania": [
+    "Cradle Mountain (Dove Lake)",
+    "MONA (Museum of Old and New Art)",
+    "Salamanca Market Hobart",
+    "Wineglass Bay (Freycinet)",
+    "Port Arthur historic site",
+    "Bay of Fires",
+    "Bruny Island day trip",
+    "Russell Falls"
+  ],
+  "Gold Coast": [
+    "Surfers Paradise Beach",
+    "Burleigh Heads National Park",
+    "Currumbin Wildlife Sanctuary",
+    "SkyPoint Observation Deck",
+    "Tamborine Mountain Skywalk",
+    "Springbrook National Park (Natural Bridge)",
+    "Sea World",
+    "Broadbeach"
+  ],
+  "Whitsundays": [
+    "Whitehaven Beach",
+    "Hill Inlet Lookout",
+    "Heart Reef scenic flight",
+    "Hamilton Island",
+    "Daydream Island",
+    "Hardy Reef pontoon snorkel",
+    "Airlie Beach lagoon",
+    "Hook Island"
+  ],
+  "Rio de Janeiro": [
+    "Christ the Redeemer (Corcovado)",
+    "Sugarloaf Mountain cable car",
+    "Copacabana Beach",
+    "Ipanema Beach & Arpoador sunset",
+    "Selarón Steps (Escadaria Selarón)",
+    "Lapa nightlife",
+    "Tijuca National Park",
+    "Maracanã Stadium"
+  ],
+  "Salvador (Bahia)": [
+    "Pelourinho historic centre",
+    "Elevador Lacerda",
+    "São Francisco Church",
+    "Mercado Modelo",
+    "Farol da Barra lighthouse",
+    "Itapuã Beach",
+    "Igreja do Bonfim",
+    "Praia do Forte day trip"
+  ],
+  "Iguazu Falls": [
+    "Iguazu Falls (Brazilian side)",
+    "Devil's Throat (Garganta do Diabo)",
+    "Macuco Safari boat",
+    "Parque das Aves bird park",
+    "Iguazu Argentine side",
+    "Itaipu Dam",
+    "Marco das Três Fronteiras",
+    "Helicopter ride over the falls"
+  ],
+  "Florianópolis": [
+    "Praia Mole",
+    "Lagoa da Conceição",
+    "Joaquina Beach (sandboarding)",
+    "Ribeirão da Ilha (oysters)",
+    "Praia dos Ingleses",
+    "Santo Antônio de Lisboa",
+    "Campeche Island",
+    "Jurerê Internacional beach clubs"
+  ],
+  "Amazon (Manaus)": [
+    "Meeting of Waters (Encontro das Águas)",
+    "Anavilhanas Archipelago",
+    "Teatro Amazonas opera house",
+    "Jungle lodge stay (Juma or Anavilhanas)",
+    "Pink river dolphin swim",
+    "Indigenous community visit",
+    "Mercado Adolpho Lisboa",
+    "Praia da Lua"
+  ],
+  "Fernando de Noronha": [
+    "Baía do Sancho",
+    "Praia do Leão",
+    "Morro Dois Irmãos viewpoint",
+    "Baía dos Porcos",
+    "Atalaia natural pool",
+    "Praia da Cacimba do Padre",
+    "Ilha do Frade",
+    "Forte dos Remédios"
+  ],
+  "Paraty": [
+    "Paraty Historic Centre cobblestones",
+    "Paraty Bay schooner tour",
+    "Trindade beaches",
+    "Cachoeira do Tobogã",
+    "Saco do Mamanguá",
+    "Cachaça distillery (Engenho d'Ouro)",
+    "Praia do Sono trek",
+    "Casa da Cultura"
+  ],
+  "Maasai Mara": [
+    "Mara Triangle game drive",
+    "Mara River wildebeest crossing",
+    "Hot-air balloon over the Mara",
+    "Maasai village (Manyatta) visit",
+    "Sand River",
+    "Oloololo Escarpment",
+    "Big Five photo safari",
+    "Sundowner on the savannah"
+  ],
+  "Amboseli": [
+    "Amboseli National Park elephants",
+    "Mount Kilimanjaro view from Amboseli",
+    "Observation Hill",
+    "Maasai cultural village",
+    "Lake Amboseli",
+    "Sinet Delta wetlands",
+    "Kimana Sanctuary",
+    "Tortilis Camp area"
+  ],
+  "Diani Beach": [
+    "Diani Beach white sands",
+    "Kisite-Mpunguti Marine Park snorkel",
+    "Wasini Island dolphin tour",
+    "Shimba Hills National Reserve",
+    "Colobus Conservation",
+    "Kaya Kinondo sacred forest",
+    "Galu Beach",
+    "Tiwi Beach kitesurfing"
+  ],
+  "Nairobi": [
+    "David Sheldrick Elephant Orphanage",
+    "Giraffe Centre",
+    "Karen Blixen Museum",
+    "Nairobi National Park",
+    "Kazuri Beads workshop",
+    "Maasai Market",
+    "Bomas of Kenya",
+    "Carnivore Restaurant"
+  ],
+  "Lake Naivasha & Hells Gate": [
+    "Hells Gate National Park bike & walk",
+    "Lake Naivasha boat ride",
+    "Crescent Island walking safari",
+    "Crater Lake game sanctuary",
+    "Elsamere (Joy Adamson's home)",
+    "Olkaria geothermal spa",
+    "Mount Longonot hike",
+    "Lake Oloiden flamingos"
+  ],
+  "Lamu": [
+    "Lamu Old Town (UNESCO)",
+    "Shela Beach",
+    "Lamu Fort",
+    "Donkey Sanctuary",
+    "Dhow sunset cruise",
+    "Manda Island",
+    "Riyadha Mosque",
+    "Lamu Museum"
+  ],
+  "Oslo": [
+    "Vigeland Sculpture Park",
+    "Oslo Opera House rooftop",
+    "Viking Ship Museum",
+    "Akershus Fortress",
+    "Munch Museum",
+    "Aker Brygge waterfront",
+    "Holmenkollen Ski Jump",
+    "Bygdøy peninsula"
+  ],
+  "Bergen & the Fjords": [
+    "Bryggen wharf",
+    "Fløibanen funicular to Mt Fløyen",
+    "Bergen Fish Market",
+    "Nærøyfjord cruise",
+    "Sognefjord",
+    "Hardangerfjord & Trolltunga",
+    "Stegastein viewpoint",
+    "Flåm Railway"
+  ],
+  "Lofoten Islands": [
+    "Reine fishing village",
+    "Henningsvær harbour",
+    "Haukland Beach",
+    "Reinebringen hike",
+    "Nusfjord",
+    "Å (Å i Lofoten village)",
+    "Kvalvika Beach hike",
+    "Trollfjord cruise"
+  ],
+  "Tromsø": [
+    "Northern Lights chase",
+    "Arctic Cathedral",
+    "Fjellheisen cable car",
+    "Polaria aquarium",
+    "Sami reindeer sledding",
+    "Tromsø Botanical Garden",
+    "Whale watching at Skjervøy",
+    "Lyngen Alps day trip"
+  ],
+  "Geirangerfjord": [
+    "Geirangerfjord cruise",
+    "Seven Sisters waterfall",
+    "Dalsnibba Skywalk",
+    "Flydalsjuvet viewpoint",
+    "Eagle Road (Ørnesvingen)",
+    "Storseterfossen waterfall hike",
+    "Hellesylt to Geiranger ferry",
+    "Trollstigen drive"
+  ],
+  "Svalbard": [
+    "Longyearbyen town",
+    "Svalbard Global Seed Vault (exterior)",
+    "Polar bear safari (boat)",
+    "Pyramiden ghost town",
+    "Tempelfjorden ice cave",
+    "Dog-sledding on the tundra",
+    "North Pole expedition starts",
+    "Svalbard Museum"
+  ],
+  "New York City": [
+    "Central Park (Bethesda Fountain & The Ramble)",
+    "The High Line elevated park",
+    "Brooklyn Bridge walkway",
+    "Top of the Rock (Rockefeller Center)",
+    "The Metropolitan Museum of Art",
+    "MoMA – Museum of Modern Art",
+    "One World Observatory",
+    "Whitney Museum of American Art",
+    "The Vessel & Hudson Yards",
+    "Brooklyn Dumbo waterfront",
+    "Grand Central Terminal",
+    "The Oculus (World Trade Center)",
+    "Times Square at midnight",
+    "The Frick Collection",
+    "Governors Island (summer)",
+    "Chelsea Market & Meatpacking District"
+  ],
+  "Los Angeles": [
+    "Griffith Observatory & Hollywood Sign hike",
+    "Venice Beach Boardwalk",
+    "The Getty Center",
+    "Santa Monica Pier & Third Street Promenade",
+    "Runyon Canyon sunrise hike",
+    "The Broad museum",
+    "Los Angeles County Museum of Art (LACMA)",
+    "Rodeo Drive & Beverly Hills",
+    "The Original Farmers Market (Fairfax)",
+    "Malibu creek state park",
+    "The Hollywood Walk of Fame",
+    "Abbot Kinney Blvd boutiques",
+    "Silverlake reservoir walk",
+    "Mulholland Drive scenic overlook",
+    "The Hammer Museum",
+    "Grand Central Market (DTLA)"
+  ],
+  "San Francisco": [
+    "Golden Gate Bridge (vista point walk)",
+    "Alcatraz Island tour",
+    "Fisherman's Wharf & Pier 39",
+    "Lands End coastal trail",
+    "Mission Dolores Park",
+    "Ferry Building Marketplace",
+    "Twin Peaks summit viewpoint",
+    "Haight-Ashbury neighbourhood",
+    "Coit Tower & Telegraph Hill",
+    "The de Young Museum",
+    "Painted Ladies (Alamo Square)",
+    "Muir Woods day trip",
+    "Chinatown (oldest in North America)",
+    "Baker Beach (Golden Gate backdrop)",
+    "California Academy of Sciences",
+    "Lombard Street (crookedest street)"
+  ],
+  "Grand Canyon": [
+    "South Rim Mather Point sunrise",
+    "Bright Angel Trail hike",
+    "Desert View Watchtower",
+    "Rim Trail sunset walk",
+    "Grand Canyon Skywalk (West Rim)",
+    "Hermit Road scenic drive",
+    "South Kaibab Trail overlook",
+    "Yaki Point panorama",
+    "Verkamp's Visitor Center",
+    "Kolb Studio gallery",
+    "Mather Point amphitheatre",
+    "Pima Point viewpoint",
+    "Colorado River viewpoint (Pipe Creek Vista)",
+    "Grand Canyon Village Historic District",
+    "Havasu Falls day-trip (seasonal)",
+    "Phantom Ranch (inner canyon)"
+  ],
+  "Las Vegas": [
+    "The Bellagio Fountains (nightly show)",
+    "Fremont Street Experience",
+    "The LINQ High Roller observation wheel",
+    "Neon Museum (Boneyard)",
+    "Mob Museum",
+    "Red Rock Canyon National Conservation Area",
+    "The Venetian Grand Canal Shoppes",
+    "Sphere Las Vegas",
+    "T-Mobile Arena events",
+    "Area 15 & Meow Wolf Omega Mart",
+    "Springs Preserve",
+    "The Smith Center for Performing Arts",
+    "Seven Magic Mountains art installation",
+    "Las Vegas Strip walkway at dusk",
+    "Caesars Palace Forum Shops",
+    "Valley of Fire State Park day trip"
+  ],
+  "Miami": [
+    "South Beach Ocean Drive (Art Deco Historic District)",
+    "Wynwood Walls street art",
+    "Little Havana — Calle Ocho",
+    "Vizcaya Museum & Gardens",
+    "The Bass Museum of Art",
+    "Brickell City Centre & rooftop bars",
+    "Bayside Marketplace waterfront",
+    "Pérez Art Museum Miami (PAMM)",
+    "Bill Baggs Cape Florida State Park",
+    "Miami Beach Boardwalk (sunrise)",
+    "Coconut Grove neighbourhood",
+    "The Rubell Museum",
+    "Marlins Park (Miami stadium)",
+    "Frost Science Museum",
+    "Jungle Island",
+    "Design District luxury boutiques"
+  ],
+  "London": [
+    "Tower of London & Tower Bridge",
+    "Tate Modern (Bankside)",
+    "Borough Market",
+    "Covent Garden piazza",
+    "The British Museum",
+    "Greenwich & the Cutty Sark",
+    "Notting Hill & Portobello Road Market",
+    "Hyde Park & Kensington Gardens",
+    "Sky Garden (free, book ahead)",
+    "Camden Market",
+    "Brick Lane Sunday market",
+    "St Paul's Cathedral",
+    "National Gallery & Trafalgar Square",
+    "The Shard viewing gallery",
+    "Southbank riverside walk",
+    "Shoreditch street art & nightlife"
+  ],
+  "Edinburgh": [
+    "Edinburgh Castle",
+    "Royal Mile historic walk",
+    "Arthur's Seat volcano hike",
+    "Scottish National Museum",
+    "Greyfriars Kirkyard",
+    "The Palace of Holyroodhouse",
+    "Calton Hill panoramic view",
+    "Victoria Street (curved cobblestone alley)",
+    "The Scotch Whisky Experience",
+    "Dean Village riverside walk",
+    "Grassmarket neighbourhood",
+    "Scottish National Gallery",
+    "Camera Obscura & World of Illusions",
+    "Portobello Beach",
+    "Craigmillar Castle (secret gem)",
+    "Mary King's Close underground tour"
+  ],
+  "Manchester": [
+    "Old Trafford (Manchester United Museum)",
+    "Etihad Stadium tour",
+    "Northern Quarter street art & bars",
+    "Manchester Museum",
+    "John Rylands Library",
+    "Castlefield urban heritage park",
+    "The Whitworth art gallery",
+    "Manchester Art Gallery",
+    "Piccadilly Gardens",
+    "Afflecks Palace indie market",
+    "MOSI – Museum of Science and Industry",
+    "Spinningfields waterfront",
+    "Ancoats neighbourhood (coffee & food)",
+    "Salford Quays & The Lowry",
+    "Deansgate Locks nightlife",
+    "MediaCityUK (BBC studios)"
+  ],
+  "Oxford": [
+    "Bodleian Library tour",
+    "Christ Church College & Tom Tower",
+    "Radcliffe Camera & Radcliffe Square",
+    "Punting on the River Cherwell",
+    "Ashmolean Museum",
+    "The Covered Market",
+    "Oxford Botanic Garden",
+    "Magdalen College & deer park",
+    "The Sheldonian Theatre",
+    "Merton College gardens",
+    "Bridge of Sighs (Hertford Bridge)",
+    "Port Meadow riverside walk",
+    "Blackwell's Bookshop",
+    "The Bear Inn (oldest pub in Oxford)",
+    "Pitt Rivers Museum",
+    "Blenheim Palace day-trip"
+  ],
+  "Lake District": [
+    "Scafell Pike summit hike",
+    "Windermere lake cruise",
+    "Grasmere village & Dove Cottage",
+    "Coniston Water kayaking",
+    "Catbells ridge walk",
+    "Ambleside waterfalls trail",
+    "Tarn Hows scenic tarn walk",
+    "Keswick town & Derwentwater",
+    "Ullswater Steamers",
+    "Hardknott Pass drive",
+    "Buttermere circular walk",
+    "Aira Force waterfall",
+    "Beatrix Potter's Hill Top Farm",
+    "Old Man of Coniston hike",
+    "Hawkshead village lanes",
+    "Fell Foot Park lakeshore"
+  ],
+  "Birmingham": [
+    "Jewellery Quarter walking tour",
+    "Birmingham Museum & Art Gallery",
+    "Gas Street Basin canal network",
+    "Balti Triangle (Ladypool Road)",
+    "Cadbury World (Bournville)",
+    "Brindleyplace waterfront",
+    "Digbeth creative quarter",
+    "Custard Factory arts complex",
+    "Mailbox rooftop bar",
+    "The Bullring & Selfridges",
+    "Thinktank (science museum)",
+    "Back to Backs (National Trust)",
+    "Moseley village",
+    "Birmingham Hippodrome",
+    "Cannon Hill Park",
+    "Sutton Park (largest urban park in Europe)"
+  ],
+  "Capital City": [
+    "Old Town main square",
+    "Central cathedral",
+    "Riverside promenade",
+    "City history museum",
+    "Rooftop sunset bar",
+    "Botanical garden",
+    "Central food market",
+    "Day-trip nature reserve"
+  ],
+  "Old Town / Historic Quarter": [
+    "Cobblestone main plaza",
+    "Historic cathedral",
+    "Castle ramparts",
+    "Artisan workshop street",
+    "Heritage walking tour",
+    "Local heritage museum",
+    "Sunset viewpoint over rooftops",
+    "Traditional tavern street"
+  ],
+  "Coastal Resort": [
+    "Main beach promenade",
+    "Old harbour",
+    "Cliffside viewpoint",
+    "Seafood market",
+    "Lighthouse walk",
+    "Sunset beach bar",
+    "Boat trip to nearby cove",
+    "Beachfront night market"
+  ],
+  "Mountain Retreat": [
+    "Cable car summit",
+    "Alpine lake hike",
+    "Mountain village square",
+    "Hot springs",
+    "Forest waterfall trail",
+    "Scenic ridge viewpoint",
+    "Local rifugio lunch",
+    "Stargazing spot"
+  ],
+  "Cultural Hub": [
+    "National museum",
+    "Historic theatre",
+    "Artisan quarter",
+    "Gallery district",
+    "Heritage walking tour",
+    "Concert hall",
+    "Old library",
+    "Cultural night market"
+  ],
+  "Hidden Gem Village": [
+    "Village main square",
+    "Sunset hill viewpoint",
+    "Family-run bakery",
+    "Surrounding nature trail",
+    "Old chapel",
+    "Riverbank walk",
+    "Artisan workshop",
+    "Communal dinner spot"
+  ],
+
+  // ── CHINA ──
+  "Beijing": [
+    "Great Wall of China at Mutianyu",
+    "Forbidden City (Palace Museum)",
+    "Tiananmen Square",
+    "Temple of Heaven",
+    "Summer Palace",
+    "Beihai Park",
+    "Wangfujing Snack Street",
+    "Nanluoguxiang hutong alley",
+    "798 Art District",
+    "Lama Temple (Yonghe Gong)",
+    "Prince Gong's Mansion",
+    "Drum Tower & Bell Tower",
+    "Ming Tombs (Changling)",
+    "Jingshan Park panoramic viewpoint",
+    "Sanlitun bar & shopping district",
+    "Beijing National Aquatics Center"
+  ],
+  "Shanghai": [
+    "The Bund waterfront promenade",
+    "Yu Garden & Old City",
+    "Lujiazui Skyline & Oriental Pearl Tower",
+    "Shanghai Tower observation deck",
+    "Tianzifang arts & crafts lane",
+    "Xintiandi heritage shikumen district",
+    "Nanjing Road pedestrian shopping street",
+    "M50 Creative Park art galleries",
+    "Jing'an Temple",
+    "Longhua Temple & Pagoda",
+    "French Concession (Huaihai Road)",
+    "Shanghai Museum",
+    "Zhujiajiao water town day trip",
+    "Power Station of Art",
+    "Sinan Mansions",
+    "Paramount Ballroom (re-opened heritage venue)"
+  ],
+  "Xi'an": [
+    "Terracotta Army Museum (Pit 1, 2 & 3)",
+    "Xi'an City Wall cycle ride",
+    "Muslim Quarter & Great Mosque",
+    "Bell Tower of Xi'an",
+    "Drum Tower Night Market",
+    "Shaanxi History Museum",
+    "Big Wild Goose Pagoda",
+    "Huaqing Hot Springs & Palace",
+    "Tang Paradise show",
+    "Gaojia Courtyard theatre",
+    "Forest of Stone Steles Museum",
+    "Small Wild Goose Pagoda",
+    "Daming Palace National Heritage Park",
+    "Guanzhong Folk Art Museum",
+    "Xingqing Palace Park",
+    "Xi'an Calligraphy Museum"
+  ],
+  "Zhangjiajie National Forest Park": [
+    "Avatar Hallelujah Mountain (Southern Sky Column)",
+    "Tianmen Mountain Glass Walkway",
+    "Tianmen Cave (Heaven's Gate)",
+    "Bailong Elevator (world's tallest outdoor elevator)",
+    "Golden Whip Stream valley walk",
+    "Yuanjiajie summit lookout",
+    "Tianzi Mountain scenic area",
+    "Zhangjiajie Glass Bridge",
+    "Wulingyuan Scenic Area",
+    "Yellow Dragon Cave",
+    "Suoxiyu nature reserve trail",
+    "Tianmen Mountain cableway",
+    "Zhangjiajie Grand Canyon",
+    "Xibu Street local food market"
+  ],
+  "Guilin": [
+    "Li River cruise (Guilin to Yangshuo)",
+    "Yangshuo West Street",
+    "Reed Flute Cave",
+    "Elephant Trunk Hill Park",
+    "Seven Star Park",
+    "Fubo Hill scenic area",
+    "Longji Rice Terraces (Longsheng)",
+    "Two Rivers Four Lakes night cruise",
+    "Impression Sanjie Liu light show",
+    "Yao Mountain ropeway",
+    "Daxu Ancient Town",
+    "Guilin Museum",
+    "Moon Hill arch near Yangshuo",
+    "Cormorant fishing at Xingping",
+    "Silver Cave stalactite cavern",
+    "Laozhai Hill sunrise viewpoint"
+  ],
+  "Chengdu": [
+    "Chengdu Research Base of Giant Panda Breeding",
+    "Wide and Narrow Alley (Kuanzhai Xiangzi)",
+    "Jinli Ancient Street",
+    "Wuhou Shrine (Three Kingdoms memorial)",
+    "Du Fu Thatched Cottage",
+    "People's Park teahouse",
+    "Sichuan Opera face-changing show",
+    "Chunxi Road shopping district",
+    "Leshan Giant Buddha day trip",
+    "Mount Emei day trip",
+    "Sanxingdui Museum",
+    "Tianfu Square",
+    "Qingcheng Mountain day trip",
+    "Hot pot dinner on Yulin Road",
+    "Chengdu Museum",
+    "Anren Ancient Town"
+  ],
+
+  // ── SINGAPORE ──
+  "Marina Bay Sands": [
+    "Marina Bay Sands SkyPark Observation Deck",
+    "ArtScience Museum",
+    "The Shoppes at Marina Bay Sands",
+    "Marina Bay waterfront promenade",
+    "Helix Bridge night walk",
+    "Esplanade Theatres on the Bay",
+    "Merlion Park",
+    "Float at Marina Bay",
+    "The Fullerton Hotel heritage walk",
+    "Gardens by the Bay (nearby)",
+    "Marina Barrage rooftop garden",
+    "CE LA VI rooftop bar"
+  ],
+  "Sentosa Island": [
+    "Universal Studios Singapore",
+    "S.E.A. Aquarium",
+    "Siloso Beach",
+    "Palawan Beach",
+    "Tanjong Beach Club",
+    "Wings of Time night show",
+    "Adventure Cove Waterpark",
+    "Fort Siloso heritage museum",
+    "Madame Tussauds Singapore",
+    "Skyline Luge Sentosa",
+    "Resorts World Sentosa casino",
+    "iFly Singapore indoor skydiving"
+  ],
+  "Gardens by the Bay": [
+    "Supertree Grove OCBC Skyway",
+    "Cloud Forest Dome",
+    "Flower Dome",
+    "Garden Rhapsody light & sound show",
+    "Sun Pavilion cactus garden",
+    "Heritage Gardens walk",
+    "Children's Garden",
+    "Satay by the Bay hawker centre",
+    "Bay East Garden waterfront",
+    "Golden Garden sculpture walk",
+    "Far East Organization Children's Garden",
+    "Meadow outdoor concert space"
+  ],
+  "Chinatown": [
+    "Sri Mariamman Temple",
+    "Buddha Tooth Relic Temple",
+    "Chinatown Heritage Centre",
+    "Chinatown Street Market (Pagoda Street)",
+    "Tong Heng Pastry (egg tarts since 1944)",
+    "Maxwell Food Centre",
+    "Lau Pa Sat hawker market",
+    "Keong Saik Road bar strip",
+    "Pinnacle@Duxton sky bridge",
+    "Ann Siang Hill & Club Street",
+    "Amoy Street Food Centre",
+    "Thian Hock Keng Temple"
+  ],
+  "Orchard Road": [
+    "ION Orchard mall",
+    "Takashimaya Shopping Centre",
+    "Ngee Ann City",
+    "Paragon Mall",
+    "313@Somerset",
+    "Knightsbridge luxury boutiques",
+    "CÉ LA VI cocktail bar",
+    "Emerald Hill heritage conservation shophouses",
+    "Dempsey Hill dining enclave (nearby)",
+    "Mandarin Gallery",
+    "The Heeren shopping centre",
+    "Wisma Atria"
+  ],
+  "Singapore Zoo & Night Safari": [
+    "Singapore Zoo open-concept enclosures",
+    "Night Safari tram ride",
+    "Jungle Breakfast with Wildlife",
+    "Creatures of the Night show",
+    "River Wonders (Amazon River Quest)",
+    "Bird Paradise",
+    "Mandai Wildlife Reserve entrance",
+    "Sungei Buloh Wetland Reserve day trip",
+    "MacRitchie Reservoir park walk",
+    "Bukit Timah Nature Reserve hike"
+  ],
+
+  // ── UAE ──
+  "Dubai": [
+    "Burj Khalifa At the Top observation deck",
+    "Dubai Mall & Dubai Fountain show",
+    "Palm Jumeirah boardwalk & Atlantis",
+    "Dubai Frame",
+    "Gold Souk & Spice Souk (Deira)",
+    "Dubai Creek Abra (water taxi) crossing",
+    "Al Fahidi Historic District",
+    "Dubai Museum",
+    "Museum of the Future",
+    "Dubai Marina waterfront walk",
+    "JBR The Walk beach promenade",
+    "Alserkal Avenue contemporary art district",
+    "La Mer beachfront",
+    "Dubai Opera",
+    "Ski Dubai at Mall of the Emirates",
+    "Bastakiya Quarter heritage houses"
+  ],
+  "Abu Dhabi": [
+    "Sheikh Zayed Grand Mosque",
+    "Louvre Abu Dhabi",
+    "Qasr Al Watan (Presidential Palace)",
+    "Ferrari World Abu Dhabi",
+    "Yas Island & Yas Marina Circuit",
+    "Warner Bros. World Abu Dhabi",
+    "Corniche Beach promenade",
+    "Heritage Village Abu Dhabi",
+    "Al Jahili Fort (Al Ain day trip)",
+    "Mangrove National Park kayak tour",
+    "Sir Bani Yas Island wildlife",
+    "Observation Deck at 300 (Etihad Towers)"
+  ],
+  "Palm Jumeirah": [
+    "Atlantis The Palm resort",
+    "Aquaventure Waterpark",
+    "The Lost Chambers Aquarium",
+    "NOBU at Atlantis restaurant",
+    "Rixos The Palm beach club",
+    "Palm Monorail & Gateway Towers",
+    "Nakheel Mall",
+    "Club Vista Mare dining boardwalk",
+    "Waldorf Astoria Palm beach",
+    "The Palm Boardwalk sunset walk",
+    "One&Only The Palm hotel gardens",
+    "Atlantis The Royal rooftop"
+  ],
+  "Desert Safari Dubai": [
+    "Red dune bashing at Lahbab Desert",
+    "Camel ride at sunset",
+    "Bedouin camp dinner under the stars",
+    "Sand boarding on Lahbab dunes",
+    "Hatta Mountain day trip",
+    "Hatta Kayaking on Hatta Dam",
+    "Al Maha Desert Resort",
+    "Bab Al Shams Desert Resort",
+    "Hot air balloon ride over Dubai Desert",
+    "Al Qudra Lakes cycling desert trail",
+    "Fossil Rock (Jebel Maleihah)",
+    "Dubai Desert Conservation Reserve game drive"
+  ],
+  "Sharjah": [
+    "Sharjah Museum of Islamic Civilization",
+    "Sharjah Art Museum",
+    "Sharjah Heritage Museum",
+    "Al Noor Island Butterfly House",
+    "Al Majaz Waterfront",
+    "Heart of Sharjah heritage district",
+    "Blue Souk (Central Market Sharjah)",
+    "Sharjah Aquarium",
+    "Al Hisn Fort",
+    "Sharjah Natural History Museum",
+    "Mleiha Archaeological Centre",
+    "Al Qasba canal-side dining strip"
+  ],
+  "Fujairah": [
+    "Fujairah Fort (oldest fort in UAE)",
+    "Bithnah Fort & archaeological site",
+    "Al Bidya Mosque (oldest mosque in UAE)",
+    "Snoopy Island snorkelling",
+    "Sandy Beach Resort & diving centre",
+    "Wadi Wurayah waterfall hike",
+    "Hajar Mountains 4x4 trail",
+    "Fujairah Corniche beach walk",
+    "Masafi Friday Market (pottery & rugs)",
+    "Khor Fakkan amphitheatre & beach",
+    "Dibba fishing village",
+    "Khorfakkan Hanging Gardens trail"
+  ],
+
+  // ── South Korea ──────────────────────────────────────────────
+  "Seoul": [
+    "Gyeongbokgung Palace",
+    "Bukchon Hanok Village",
+    "N Seoul Tower (Namsan)",
+    "Myeongdong Shopping Street & Street Food",
+    "Changdeokgung Palace & Secret Garden",
+    "Hongdae Art & Nightlife District",
+    "Lotte World Theme Park",
+    "Dongdaemun Design Plaza (DDP)",
+    "Insadong Cultural Street",
+    "Gwangjang Market (bindaetteok & yukhoe)",
+    "Itaewon International District",
+    "Cheonggyecheon Stream promenade",
+    "War Memorial of Korea",
+    "Jogyesa Temple",
+    "Noryangjin Fish Market",
+    "Han River Park cycling & picnic"
+  ],
+  "Gyeongju": [
+    "Bulguksa Temple (UNESCO)",
+    "Seokguram Grotto (UNESCO)",
+    "Donggung Palace and Wolji Pond",
+    "Cheomseongdae Observatory",
+    "Daereungwon Tomb Complex",
+    "Gyeongju National Museum",
+    "Woljeonggyo Bridge",
+    "Gyeongju Yangdong Folk Village",
+    "Namsan Mountain hike & stone Buddhas",
+    "Bunhwangsa Temple pagoda",
+    "Tumuli Park royal tombs",
+    "Gyerim forest sacred grove"
+  ],
+  "Busan": [
+    "Haeundae Beach",
+    "Gamcheon Culture Village",
+    "Jagalchi Fish Market",
+    "Haedong Yonggungsa Temple",
+    "Gwangalli Beach & Diamond Bridge",
+    "Taejongdae Park cliffs",
+    "Songdo Cable Car",
+    "BIFF Square & Gukje Market",
+    "UN Memorial Cemetery",
+    "Beomeosa Temple Geumjeongsan",
+    "Shinsegae Centum City (world's largest dept store)",
+    "Oryukdo Skywalk"
+  ],
+  "Daegu": [
+    "Apsan Park cable car",
+    "Donghwasa Temple",
+    "Seomun Market",
+    "E-World Theme Park",
+    "83 Tower observation deck",
+    "Palgongsan Mountain & Gatbawi Buddha",
+    "Daegu Arboretum",
+    "Kim Kwang-seok Street mural alley",
+    "Gyesan Catholic Cathedral",
+    "Duryu Park",
+    "Daegu Modern History Museum"
+  ],
+  "Incheon": [
+    "Incheon Chinatown",
+    "Songdo Central Park",
+    "Wolmido Island seafood & rides",
+    "Incheon Grand Park",
+    "Eurwangni Beach",
+    "Sinpo International Market",
+    "Jayu Park & MacArthur statue",
+    "Incheon Open Port Modern Architecture Street",
+    "Sorae Wetland Ecological Park",
+    "Ganghwa Island fortress"
+  ],
+  "Jeju": [
+    "Hallasan National Park crater hike",
+    "Seongsan Ilchulbong (Sunrise Peak)",
+    "Cheonjiyeon Waterfall",
+    "Manjanggul Lava Tube Cave",
+    "Hallim Park subtropical garden",
+    "O'Sulloc Tea Museum & green tea fields",
+    "Jeju Loveland sculpture park",
+    "Jungmun Saekdal Beach",
+    "Jusangjeolli Cliff basalt columns",
+    "Seopjikoji coastal walk",
+    "Yongduam Rock (Dragon Head Rock)",
+    "Jeju Folk Village Museum"
+  ],
+  "Toronto": [
+    "CN Tower observation deck & EdgeWalk",
+    "Kensington Market neighbourhood walk",
+    "Distillery Historic District",
+    "Royal Ontario Museum",
+    "St. Lawrence Market",
+    "Toronto Islands ferry & Centre Island",
+    "Art Gallery of Ontario",
+    "Ripley's Aquarium of Canada",
+    "Graffiti Alley in the Fashion District",
+    "Casa Loma castle & gardens",
+    "High Park cherry blossoms & trails",
+    "Harbourfront Centre waterfront walk",
+    "Aga Khan Museum",
+    "Scarborough Bluffs clifftop viewpoint",
+    "Nathan Phillips Square & City Hall",
+    "Spadina Museum & historic gardens"
+  ],
+  "Vancouver": [
+    "Stanley Park seawall cycle or walk",
+    "Granville Island Public Market",
+    "Capilano Suspension Bridge Park",
+    "Gastown Steam Clock & cobblestone streets",
+    "Grouse Mountain gondola & wildlife refuge",
+    "Vancouver Aquarium",
+    "English Bay Beach sunset walk",
+    "Museum of Anthropology at UBC",
+    "Lynn Canyon Suspension Bridge (free)",
+    "VanDusen Botanical Garden",
+    "Chinatown Millennium Gate & Dr. Sun Yat-Sen Garden",
+    "Whistler Blackcomb day trip",
+    "Commercial Drive neighbourhood cafés",
+    "Lighthouse Park old-growth forest hike",
+    "Science World at TELUS World of Science",
+    "Lonsdale Quay Market & North Shore view"
+  ],
+  "Montreal": [
+    "Old Montreal (Vieux-Montréal) cobblestone walk",
+    "Notre-Dame Basilica of Montréal",
+    "Mount Royal Park & Kondiaronk Belvedere viewpoint",
+    "Plateau-Mont-Royal neighbourhood & The Main",
+    "Montreal Museum of Fine Arts",
+    "Jean-Talon Market in Little Italy",
+    "Old Port waterfront & clock tower",
+    "Atwater Market",
+    "Quartier des Spectacles arts district",
+    "Montreal Botanical Garden & Insectarium",
+    "Underground City (RÉSO) pedestrian network",
+    "Schwartz's Deli famous smoked meat",
+    "Pointe-à-Callière Archaeology Museum",
+    "St-Viateur Bagel & Fairmount Bagel",
+    "McGill University campus stroll",
+    "Laurier Park & Mile End murals"
+  ],
+  "Calgary": [
+    "Calgary Stampede grounds & Scotiabank Saddledome",
+    "Inglewood neighbourhood & Bird Sanctuary",
+    "Heritage Park Historical Village",
+    "Calgary Zoo",
+    "Studio Bell — National Music Centre",
+    "Peace Bridge & Bow River pathway",
+    "Glenbow Museum",
+    "Prince's Island Park",
+    "Canada Olympic Park (WinSport)",
+    "East Village neighbourhood walk",
+    "Kensington Village indie cafés & shops",
+    "Fish Creek Provincial Park",
+    "Banff National Park day trip (90 min)",
+    "Cochrane Ranche historic site",
+    "Chinatown Cultural Centre",
+    "Devonian Gardens indoor park"
+  ],
+  "Quebec City": [
+    "Château Frontenac iconic landmark",
+    "Old Quebec City walls & fortifications walk",
+    "Plains of Abraham historic battlefield",
+    "Quartier Petit-Champlain shopping & art galleries",
+    "Montmorency Falls (higher than Niagara)",
+    "Place Royale historic square",
+    "Musée de la Civilisation",
+    "La Citadelle of Quebec & Changing of the Guard",
+    "Île d'Orléans scenic island loop",
+    "Grand-Théâtre de Québec",
+    "Sainte-Anne-de-Beaupré Basilica",
+    "Quartier Saint-Roch hip cafés & street art",
+    "Musée National des Beaux-Arts du Québec",
+    "Battlefields Park autumn foliage walk",
+    "Winter Carnival ice sculptures (February)",
+    "Ferry across the St. Lawrence to Lévis"
+  ],
+  "Banff": [
+    "Lake Louise turquoise shoreline walk",
+    "Moraine Lake Valley of the Ten Peaks viewpoint",
+    "Banff Avenue & Bear Street shops",
+    "Banff Upper Hot Springs soak",
+    "Johnston Canyon lower & upper falls hike",
+    "Sulphur Mountain Gondola & boardwalk",
+    "Bow Falls viewpoint",
+    "Peyto Lake & Bow Summit (Icefields Parkway)",
+    "Icefields Parkway scenic drive to Jasper",
+    "Athabasca Glacier walk",
+    "Two Jack Lake sunset reflection",
+    "Fairmont Banff Springs Castle hotel lobby",
+    "Cave & Basin National Historic Site",
+    "Vermilion Lakes sunset drive",
+    "Lake Minnewanka boat cruise",
+    "Sunshine Village ski area (winter) or wildflower hike (summer)"
+  ],
+  "Zurich": [
+  "Bahnhofstrasse",
+  "Lake Zurich",
+  "Grossmünster",
+  "Swiss National Museum",
+  "Lindenhof",
+  "Uetliberg",
+  "Fraumünster",
+  "Zurich Opera House"
+],
+
+"Lucerne": [
+  "Chapel Bridge",
+  "Lion Monument",
+  "Lake Lucerne",
+  "Musegg Wall",
+  "Mount Pilatus",
+  "Mount Rigi",
+  "KKL Lucerne",
+  "Old Town Lucerne"
+],
+
+"Interlaken": [
+  "Harder Kulm",
+  "Lake Thun",
+  "Lake Brienz",
+  "Höhematte Park",
+  "Jungfraujoch",
+  "Schynige Platte",
+  "St. Beatus Caves",
+  "Interlaken Ost"
+],
+
+"Grindelwald": [
+  "First Cliff Walk",
+  "Eiger Trail",
+  "Bachalpsee",
+  "Pfingstegg",
+  "Grindelwald Glacier Canyon",
+  "Männlichen",
+  "First Flyer",
+  "Eiger North Face Viewpoint"
+],
+
+"Zermatt": [
+  "Matterhorn",
+  "Gornergrat",
+  "Sunnegga",
+  "Matterhorn Glacier Paradise",
+  "Five Lakes Walk",
+  "Zermatt Old Village",
+  "Riffelsee",
+  "Gorner Gorge"
+],
+
+"Geneva": [
+  "Jet d'Eau",
+  "St. Pierre Cathedral",
+  "Old Town Geneva",
+  "Palais des Nations",
+  "Lake Geneva",
+  "Broken Chair",
+  "Bains des Pâquis",
+  "Jardin Anglais"
+],
+
+"Paris": [
+  "Eiffel Tower",
+  "Louvre Museum",
+  "Arc de Triomphe",
+  "Notre-Dame Cathedral",
+  "Montmartre",
+  "Champs-Élysées",
+  "Seine River Cruise",
+  "Palace of Versailles"
+],
+
+"Rome": [
+  "Colosseum",
+  "Roman Forum",
+  "Trevi Fountain",
+  "Pantheon",
+  "Vatican Museums",
+  "St. Peter's Basilica",
+  "Spanish Steps",
+  "Piazza Navona"
+],
+
+"Barcelona": [
+  "Sagrada Família",
+  "Park Güell",
+  "La Rambla",
+  "Casa Batlló",
+  "Barceloneta Beach",
+  "Gothic Quarter",
+  "Camp Nou",
+  "Montjuïc"
+],
+
+"Amsterdam": [
+  "Anne Frank House",
+  "Rijksmuseum",
+  "Van Gogh Museum",
+  "Dam Square",
+  "Jordaan District",
+  "Vondelpark",
+  "Canal Cruise",
+  "Heineken Experience"
+],
+"Cape Town": [
+  "Table Mountain",
+  "Cape Point",
+  "Boulders Beach",
+  "V&A Waterfront",
+  "Kirstenbosch Botanical Garden",
+  "Robben Island",
+  "Camps Bay Beach",
+  "Signal Hill"
+],
+
+"Johannesburg": [
+  "Apartheid Museum",
+  "Constitution Hill",
+  "Soweto",
+  "Vilakazi Street",
+  "Gold Reef City",
+  "Maboneng Precinct",
+  "Nelson Mandela Square",
+  "Johannesburg Botanical Garden"
+],
+
+"Durban": [
+  "Golden Mile",
+  "uShaka Marine World",
+  "Moses Mabhida Stadium",
+  "Durban Botanic Gardens",
+  "Umhlanga Rocks",
+  "Suncoast Casino",
+  "Blue Lagoon",
+  "Victoria Street Market"
+],
+
+"Kruger National Park": [
+  "Skukuza Camp",
+  "Lower Sabie",
+  "Crocodile Bridge",
+  "Satara Camp",
+  "Olifants Camp",
+  "God's Window",
+  "Blyde River Canyon",
+  "Panorama Route"
+],
+
+"Stellenbosch": [
+  "Delaire Graff Estate",
+  "Spier Wine Farm",
+  "Tokara Wine Estate",
+  "Stellenbosch University",
+  "Jonkershoek Nature Reserve",
+  "Lanzerac Wine Estate",
+  "Church Street",
+  "Stellenbosch Village Museum"
+],
+
+"Garden Route": [
+  "Knysna Heads",
+  "Tsitsikamma National Park",
+  "Plettenberg Bay",
+  "Wilderness National Park",
+  "Bloukrans Bridge",
+  "Storms River Mouth",
+  "Robberg Nature Reserve",
+  "Knysna Waterfront"
+],
+"Berlin": [
+  "Brandenburg Gate",
+  "Reichstag Building",
+  "Berlin Wall Memorial",
+  "East Side Gallery",
+  "Museum Island",
+  "Checkpoint Charlie",
+  "Alexanderplatz",
+  "Berlin Cathedral"
+],
+
+"Munich": [
+  "Marienplatz",
+  "Nymphenburg Palace",
+  "English Garden",
+  "Viktualienmarkt",
+  "BMW Museum",
+  "Olympiapark",
+  "Residenz Munich",
+  "Hofbräuhaus München"
+],
+
+"Hamburg": [
+  "Miniatur Wunderland",
+  "Elbphilharmonie",
+  "Speicherstadt",
+  "Hamburg Harbour",
+  "St. Michael's Church",
+  "Alster Lake",
+  "Landungsbrücken",
+  "Planten un Blomen"
+],
+
+"Cologne": [
+  "Cologne Cathedral",
+  "Hohenzollern Bridge",
+  "Old Town Cologne",
+  "Chocolate Museum",
+  "Rhine Promenade",
+  "Museum Ludwig",
+  "Great St. Martin Church",
+  "Cologne Cable Car"
+],
+
+"Frankfurt": [
+  "Römerberg",
+  "Main Tower",
+  "Palmengarten",
+  "Städel Museum",
+  "Frankfurt Cathedral",
+  "Iron Footbridge",
+  "Goethe House",
+  "Museumsufer"
+],
+
+"Heidelberg": [
+  "Heidelberg Castle",
+  "Old Bridge",
+  "Philosopher's Walk",
+  "Old Town Heidelberg",
+  "Church of the Holy Spirit",
+  "Königstuhl",
+  "Student Prison",
+  "Market Square Heidelberg"
+],
+
+"Garmisch-Partenkirchen": [
+  "Zugspitze",
+  "Partnach Gorge",
+  "Eibsee",
+  "Olympic Ski Stadium",
+  "AlpspiX Viewpoint",
+  "Wank Mountain",
+  "Kreuzeckbahn",
+  "Riessersee Lake"
+],
+"Auckland": [
+  "Sky Tower",
+  "Auckland Harbour Bridge",
+  "Waiheke Island",
+  "Mount Eden",
+  "Viaduct Harbour",
+  "Auckland Domain",
+  "Mission Bay",
+  "Rangitoto Island"
+],
+
+"Queenstown": [
+  "Skyline Queenstown",
+  "The Remarkables",
+  "Shotover Jet",
+  "Queenstown Gardens",
+  "Lake Wakatipu",
+  "Ben Lomond Track",
+  "Kawarau Bungy Centre",
+  "Arrowtown"
+],
+
+"Rotorua": [
+  "Te Puia",
+  "Wai-O-Tapu Thermal Wonderland",
+  "Redwoods Forest",
+  "Polynesian Spa",
+  "Skyline Rotorua",
+  "Lake Rotorua",
+  "Government Gardens",
+  "Whakarewarewa Village"
+],
+
+"Wellington": [
+  "Te Papa Museum",
+  "Mount Victoria Lookout",
+  "Wellington Cable Car",
+  "Cuba Street",
+  "Wellington Waterfront",
+  "Zealandia",
+  "Weta Workshop",
+  "Oriental Bay"
+],
+
+"Christchurch": [
+  "Christchurch Botanic Gardens",
+  "Canterbury Museum",
+  "Avon River",
+  "New Regent Street",
+  "Christchurch Gondola",
+  "Hagley Park",
+  "International Antarctic Centre",
+  "Sumner Beach"
+],
+
+"Milford Sound": [
+  "Mitre Peak",
+  "Milford Sound Cruise",
+  "Stirling Falls",
+  "Bowen Falls",
+  "Milford Track",
+  "The Chasm",
+  "Harrison Cove",
+  "Underwater Observatory"
+],
+"Kuala Lumpur": [
+  "Petronas Twin Towers",
+  "KL Tower",
+  "Batu Caves",
+  "Bukit Bintang",
+  "Merdeka Square",
+  "Central Market",
+  "Jalan Alor Night Market",
+  "Thean Hou Temple"
+],
+
+"Langkawi": [
+  "Langkawi Sky Bridge",
+  "Langkawi Cable Car",
+  "Pantai Cenang",
+  "Tanjung Rhu Beach",
+  "Kilim Geoforest Park",
+  "Eagle Square",
+  "Seven Wells Waterfall",
+  "Pulau Payar Marine Park"
+],
+
+"Penang": [
+  "George Town UNESCO Heritage Site",
+  "Penang Hill",
+  "Kek Lok Si Temple",
+  "Chew Jetty",
+  "Armenian Street",
+  "Clan Jetties",
+  "Penang Street Art",
+  "Gurney Drive"
+],
+
+"Cameron Highlands": [
+  "BOH Tea Plantation",
+  "Mossy Forest",
+  "Cameron Lavender Garden",
+  "Strawberry Farm",
+  "Gunung Brinchang",
+  "Time Tunnel Museum",
+  "Butterfly Garden",
+  "Tea Valley Viewpoint"
+],
+
+"Kota Kinabalu": [
+  "Mount Kinabalu",
+  "Tunku Abdul Rahman Marine Park",
+  "Manukan Island",
+  "Signal Hill Observatory",
+  "Kota Kinabalu Waterfront",
+  "Mari Mari Cultural Village",
+  "Sabah State Mosque",
+  "Gaya Street Market"
+],
+
+"Malacca": [
+  "Jonker Street",
+  "A Famosa",
+  "St. Paul's Hill",
+  "Dutch Square",
+  "Christ Church Melaka",
+  "Melaka River Cruise",
+  "Baba & Nyonya Heritage Museum",
+  "The Shore Sky Tower"
+],
+"Manila": [
+  "Intramuros",
+  "Fort Santiago",
+  "Rizal Park",
+  "Manila Cathedral",
+  "San Agustin Church",
+  "Binondo Chinatown",
+  "National Museum of Fine Arts",
+  "Manila Bay Walk"
+],
+
+"Boracay": [
+  "White Beach",
+  "Puka Shell Beach",
+  "Willy's Rock",
+  "Mount Luho Viewpoint",
+  "Bulabog Beach",
+  "Diniwid Beach",
+  "Crystal Cove Island",
+  "Magic Island Cliff Diving"
+],
+
+"Palawan": [
+  "Big Lagoon",
+  "Small Lagoon",
+  "Secret Lagoon",
+  "Nacpan Beach",
+  "Puerto Princesa Underground River",
+  "Kayangan Lake",
+  "Twin Lagoon",
+  "Seven Commandos Beach"
+],
+
+"Cebu": [
+  "Magellan's Cross",
+  "Basilica del Santo Niño",
+  "Temple of Leah",
+  "Tops Lookout",
+  "Kawasan Falls",
+  "Oslob Whale Shark Watching",
+  "Moalboal Sardine Run",
+  "Sirao Flower Garden"
+],
+
+"Bohol": [
+  "Chocolate Hills",
+  "Philippine Tarsier Sanctuary",
+  "Loboc River Cruise",
+  "Baclayon Church",
+  "Hinagdanan Cave",
+  "Alona Beach",
+  "Blood Compact Shrine",
+  "Panglao Island"
+],
+
+"Siargao": [
+  "Cloud 9 Boardwalk",
+  "Sugba Lagoon",
+  "Magpupungko Rock Pools",
+  "Naked Island",
+  "Daku Island",
+  "Guyam Island",
+  "Coconut View Deck",
+  "Pacifico Beach"
+],
+"Buenos Aires": [
+  "Plaza de Mayo",
+  "Casa Rosada",
+  "La Boca",
+  "Caminito",
+  "Recoleta Cemetery",
+  "Teatro Colón",
+  "Puerto Madero",
+  "San Telmo Market"
+],
+
+"Bariloche": [
+  "Cerro Campanario",
+  "Circuito Chico",
+  "Nahuel Huapi Lake",
+  "Cerro Catedral",
+  "Colonia Suiza",
+  "Llao Llao Hotel",
+  "Victoria Island",
+  "Puerto Pañuelo"
+],
+
+"Mendoza": [
+  "Parque General San Martín",
+  "Plaza Independencia",
+  "Bodega Catena Zapata",
+  "Bodega Salentein",
+  "Aconcagua Provincial Park",
+  "Puente del Inca",
+  "Uco Valley",
+  "Cacheuta Hot Springs"
+],
+
+"El Calafate": [
+  "Perito Moreno Glacier",
+  "Los Glaciares National Park",
+  "Laguna Nimez Reserve",
+  "Glaciarium",
+  "Argentino Lake",
+  "Upsala Glacier Cruise",
+  "Patagonian Ice Fields",
+  "Bahía Redonda"
+]
+};
+
+// Expose landmark data and resolve casual user input like "Bengaluru heritage places" to the real city key.
+window.cityLandmarks = cityLandmarks;
+
+const realPlaceFallbackPool = [
+  "Senso-ji Temple in Asakusa",
+  "Tsukiji Outer Market",
+  "Shibuya Crossing & Shibuya Sky",
+  "Meiji Jingu Shrine",
+  "Ueno Park & Tokyo National Museum",
+  "Golden Gai bars in Shinjuku",
+  "Omoide Yokocho yakitori alley",
+  "teamLab Planets Tokyo"
+];
+
+const cityAliasMap = {
+  bengaluru: 'Bangalore', bangalore: 'Bangalore', blr: 'Bangalore',
+  saigon: 'Ho Chi Minh City', hcmc: 'Ho Chi Minh City',
+  cdmx: 'Mexico City', 'mexico df': 'Mexico City',
+  nyc: 'New York City', 'new york': 'New York City', manhattan: 'New York City',
+  la: 'Los Angeles', 'los angeles': 'Los Angeles', hollywood: 'Los Angeles',
+  sf: 'San Francisco', 'san fran': 'San Francisco', frisco: 'San Francisco',
+  vegas: 'Las Vegas', 'las vegas': 'Las Vegas',
+  'grand canyon': 'Grand Canyon', canyon: 'Grand Canyon',
+  miami: 'Miami',
+  edinburgh: 'Edinburgh', 'edinburgh castle': 'Edinburgh',
+  manchester: 'Manchester',
+  oxford: 'Oxford',
+  'lake district': 'Lake District', lakedistrict: 'Lake District', windermere: 'Lake District',
+  birmingham: 'Birmingham', brum: 'Birmingham',
+  bkk: 'Bangkok',
+  leh: 'Leh-Ladakh', ladakh: 'Leh-Ladakh',
+  alleppey: 'Kerala (Alleppey & Munnar)', munnar: 'Kerala (Alleppey & Munnar)', kerala: 'Kerala (Alleppey & Munnar)',
+  'amalfi': 'Amalfi Coast', positano: 'Amalfi Coast',
+  palermo: 'Sicily (Palermo & Taormina)', taormina: 'Sicily (Palermo & Taormina)', sicily: 'Sicily (Palermo & Taormina)',
+  sapporo: 'Hokkaido (Sapporo & Niseko)', niseko: 'Hokkaido (Sapporo & Niseko)', hokkaido: 'Hokkaido (Sapporo & Niseko)',
+  canggu: 'Bali (Canggu & Seminyak)', seminyak: 'Bali (Canggu & Seminyak)', ubud: 'Bali (Ubud)', uluwatu: 'Bali (Uluwatu)',
+  reykjavik: 'Reykjavik', vik: 'South Coast (Vík)',
+  dubrovnik: 'Dubrovnik', zanzibar: 'Zanzibar',
+  capetown: 'Cape Town', 'cape town': 'Cape Town',
+  // China
+  'great wall': 'Beijing', 'forbidden city': 'Beijing', 'terracotta army': "Xi'an", xian: "Xi'an",
+  'avatar mountains': 'Zhangjiajie National Forest Park', zhangjiajie: 'Zhangjiajie National Forest Park',
+  'li river': 'Guilin', yangshuo: 'Guilin',
+  pandas: 'Chengdu', panda: 'Chengdu',
+  // Singapore
+  mbs: 'Marina Bay Sands', 'marina bay': 'Marina Bay Sands',
+  sentosa: 'Sentosa Island', uss: 'Sentosa Island',
+  'gardens by the bay': 'Gardens by the Bay', gbtb: 'Gardens by the Bay',
+  // UAE
+  burjkhalifa: 'Dubai', 'burj khalifa': 'Dubai', 'palm dubai': 'Palm Jumeirah',
+  'desert safari': 'Desert Safari Dubai', 'dune bashing': 'Desert Safari Dubai',
+  'sheikh zayed': 'Abu Dhabi', 'grand mosque': 'Abu Dhabi',
+  fujairah: 'Fujairah', sharjah: 'Sharjah',
+  // South Korea
+  seoul: 'Seoul', gyeongju: 'Gyeongju', busan: 'Busan', jeju: 'Jeju',
+  daegu: 'Daegu', incheon: 'Incheon', korea: 'Seoul',
+  'south korea': 'Seoul', 'k-pop': 'Seoul', myeongdong: 'Seoul',
+  hallasan: 'Jeju', 'jeju island': 'Jeju', 'haeundae': 'Busan'
+};
+
+// ====== Real, named food spots per city (restaurants, markets, food streets) ======
+const cityFoodSpots = {
+  "Tokyo": ["Sushi Dai (Toyosu Market)", "Ichiran Ramen Shibuya", "Tsukiji Sushiko", "Omoide Yokocho yakitori alley", "Afuri Ramen Ebisu", "Gonpachi Nishi-Azabu", "Tonki tonkatsu Meguro", "Nakiryu tantanmen",
+    "Sukiyabashi Jiro Roppongi",
+    "Ginza Kyubey",
+    "Tempura Kondo",
+    "Tsuta ramen",
+    "Den Aoyama",
+    "Narisawa",
+    "Maisen tonkatsu Aoyama",
+    "Nakajima Shinjuku"
+  ],
+  "Kyoto": ["Nishiki Market food stalls", "Menbaka Fire Ramen", "Pontocho Alley kaiseki", "Gion Karyo", "Issen Yoshoku okonomiyaki", "Arashiyama Yoshimura soba", "% Arabica Higashiyama", "Kyoto Engine Ramen",
+    "Honke Owariya soba (since 1465)",
+    "Tousuiro tofu kaiseki",
+    "Giro Giro Hitoshina",
+    "Yoshikawa tempura",
+    "Hyotei kaiseki",
+    "Inoda Coffee Honten",
+    "Kichi Kichi omurice",
+    "Daiyasu kushikatsu"
+  ],
+  "Osaka": ["Mizuno okonomiyaki Dotonbori", "Kuromon Ichiba Market", "Kani Doraku crab", "Ichiran Ramen Dotonbori", "Takoyaki Wanaka Sennichimae", "Harukoma Sushi Tenjinbashi", "Gyukatsu Motomura", "Endo Sushi Osaka",
+    "Imai udon Dotonbori",
+    "Daruma kushikatsu",
+    "Yakiniku Kuroge Honten",
+    "Honke Tako Take takoyaki",
+    "Hokkyokusei omurice (original)",
+    "555 American Cafe Sennichimae",
+    "Fugetsu okonomiyaki",
+    "Naniwa Okina sushi"
+  ],
+  "Hokkaido (Sapporo & Niseko)": ["Sapporo Beer Garden", "Menya Saimi ramen", "Nijo Market seafood bowl", "Sushi Zen Sapporo", "Kani Honke crab", "Genghis Khan Daruma", "Soup Curry GARAKU", "Otaru Masazushi",
+    "Niseko Pizza Co",
+    "Bang Bang yakitori Niseko",
+    "Aji no Tokei dai ramen",
+    "Kinotoya Bake cheese tarts",
+    "Ramen Yokocho Sapporo alley",
+    "Yamatoya soba Otaru",
+    "Ezo Seafoods Niseko",
+    "Sushi Nanatsuboshi"
+  ],
+  "Okinawa": ["Makishi Public Market", "Yunangi Okinawan tavern", "Steak House 88 Kokusai", "Naha Soba Daimei", "Cafe Kurukuma curry", "Ufuya Ishigaki", "Blue Seal Ice Cream Mihama", "Tonkatsu Shimaton Naha",
+    "Tarama Soba Kokusai",
+    "Goya Naha taco rice",
+    "Capricciosa Naha",
+    "Hamabe no Chaya cliff café",
+    "Outrigger Café Okinawa",
+    "Ufuya soki soba",
+    "First Makishi taco rice",
+    "Yui Rail Café Naha"
+  ],
+  "Hakone": ["Itoh Dining Hakone", "Hatsuhana soba", "Gora Brewery & Grill", "Naraya Café", "Bakery & Table Hakone", "Kappo Miyafuji", "Amazake Chaya tea house", "Salon de Thé Rosage",
+    "Cafe de motonaka Gora",
+    "Albergo Bamboo restaurant",
+    "Hatsuhana Honten soba",
+    "Marudai sushi Yumoto",
+    "Auberge Au Mirador kaiseki",
+    "Sushi Miyafuji",
+    "Hyakkaen kaiseki ryokan",
+    "Mont Blanc patisserie Gora"
+  ],
+  "Nara": ["Wa Yamamura kaiseki", "Mahoroba Daibutsu pudding", "Naramachi Ohmiya soba", "Kura Sake Gallery", "Mizuya Chaya tea", "Tempura Asuka", "Curry Bon Nara", "Café ETRANGER NARAD",
+    "Edogawa unagi Naramachi",
+    "Yamato no Dashi café",
+    "Restaurant 21 Nara Hotel",
+    "Mellow Cafe Nara",
+    "Onyasai shabu-shabu",
+    "Toko cafe Naramachi",
+    "Mizuno persimmon leaf sushi",
+    "Hiyori cafe Nara"
+  ],
+  "Kanazawa": ["Omicho Market sushi stalls", "Sushi Ippei", "Kanazawa Curry Champion", "Jiyuken omurice", "Kotobukiya kaiseki", "Higashiyama Mizuho rice", "Tawaraya ame candy shop", "Higashide Coffee",
+    "Cafe Tamon Higashi Chaya",
+    "Ippei sushi Higashi Chaya",
+    "Hashidate sushi Omicho",
+    "Otome Sushi Hirosaka",
+    "Suehiro motsu nabe",
+    "Curry House CoCo no.1 Kanazawa main",
+    "Tegawa Sushi",
+    "Kaikatei tempura"
+  ],
+  "Udaipur": ["Ambrai Restaurant lakeside", "Upre by 1559 AD", "Jaiwana Haveli rooftop", "Tribute Restaurant", "Jheel's Ginger Coffee Bar", "Natraj Dining Hall thali", "Café Edelweiss", "Savage Garden",
+    "Char Dukan paranthas",
+    "1559 AD lakeside",
+    "Krishna Restaurant Sajjangarh",
+    "Lake View Café City Palace Road",
+    "Millets of Mewar",
+    "Sunrise Restaurant Hanuman Ghat",
+    "Café Namaste Udaipur",
+    "Raas Leela rooftop",
+    "Jheel's Rooftop Cafe Hanuman Ghat"
+  
+  ],
+  "Kerala (Alleppey & Munnar)": ["Thaff Restaurant Alleppey", "Mushroom Restaurant Alleppey", "Saravana Bhavan Munnar", "Rapsy Restaurant Munnar", "Cassia Restaurant Munnar", "Halais Veg Munnar", "Harbour Restaurant Alleppey", "Royale Park Munnar",
+    "Vembanad Restaurant Munnar",
+    "Eastend Restaurant Munnar",
+    "SriKrishna Bhavan Alleppey",
+    "Café Arabia Alleppey",
+    "Kream Korner Munnar",
+    "Thalassery Restaurant Alleppey",
+    "Annapoorna Munnar",
+    "Paragon Munnar"
+  ],
+  "Leh-Ladakh": ["Bon Appetit Leh", "Tibetan Kitchen Leh", "Gesmo Restaurant Leh", "Lamayuru Restaurant", "Wonderland Restaurant Leh", "The Tibetan Kitchen Changspa", "Chopsticks Noodle Bar Leh", "Cafe Cloud Leh"],
+  "Varanasi": ["Kashi Chat Bhandar", "Blue Lassi Shop", "Pizzeria Vaatika Café", "Baati Chokha Englishia Line", "Deena Chaat Bhandar", "Brown Bread Bakery", "Bana Lassi Assi Ghat", "Open Hand Café"],
+  "Jaipur": ["Laxmi Misthan Bhandar (LMB)", "Rawat Mishtan Bhandar pyaaz kachori", "Suvarna Mahal Rambagh Palace", "Chokhi Dhani village dinner", "Niros MI Road", "Tapri Central tea", "Anokhi Café", "1135 AD Amer Fort",
+    "Spice Court",
+    "Handi Restaurant MI Road",
+    "Sankalp South Indian",
+    "Old Takeaway Mishra Rajdhani",
+    "Pandit Kulfi MI Road",
+    "Masala Chowk food court",
+    "Caravan Serai Sirsi Road",
+    "Bar Palladio Narain Niwas",
+    "Balti Kitchen Turtuk village",
+    "Padao Restaurant Nahargarh Fort",
+    "Kachori Gali street kachoris"
+  
+  
+  
+  ],
+  "Rishikesh": ["Cafe de Goa Laxman Jhula", "Little Buddha Cafe Laxman Jhula", "Chotiwala Restaurant Swarg Ashram", "Beatles Cafe Tapovan", "Bistro Nirvana Tapovan", "Pure Soul Cafe Laxman Jhula", "Ganga View Cafe Ram Jhula", "Ramana's Garden Organic Cafe"],
+  "Mumbai": ["Britannia & Co. berry pulao", "Bademiya Colaba", "Trishna seafood Kala Ghoda", "Bohri Kitchen", "Leopold Café", "Café Madras Matunga", "Ram Ashraya idli", "Mohammed Ali Road kebabs",
+    "Swati Snacks",
+    "Cafe Ideal Chowpatty",
+    "Gajalee seafood",
+    "Sardar Pav Bhaji Tardeo",
+    "Olympia Coffee House Colaba",
+    "Khyber Fort restaurant",
+    "Theobroma bakery (original)",
+    "Ling's Pavilion Colaba"
+  ],
+  "Delhi": ["Karim's Jama Masjid", "Bukhara ITC Maurya", "Indian Accent", "Paranthe Wali Gali Chandni Chowk", "Saravana Bhavan CP", "Andhra Bhavan thali", "Khan Chacha Khan Market", "Gulati Pandara Road",
+    "Moti Mahal Daryaganj",
+    "Connaught Place Wenger's bakery",
+    "Kake Da Hotel",
+    "Lord of the Drinks Khan",
+    "Rajinder Da Dhaba",
+    "Kuremal Mohanlal kulfi",
+    "Big Chill Café Khan Market",
+    "Punjab Grill"
+  ],
+  "Bangalore": ["MTR 1924 rava idli", "Vidyarthi Bhavan dosa", "Karavalli Taj", "Truffles St. Marks Road", "Koshy's St. Marks", "Toit Indiranagar brewpub", "CTR Malleshwaram", "Empire Restaurant kebabs",
+    "Brahmin's Coffee Bar Shankarapuram",
+    "SLN Coffee Jayanagar",
+    "Veena Stores Malleshwaram",
+    "Konark Misal Indiranagar",
+    "The Permit Room MG Road",
+    "Smoke House Deli Lavelle",
+    "Hammered Indiranagar",
+    "Plan B St. Marks",
+    "Airlines Hotel Lavelle Road",
+    "The Rameshwaram Cafe Brookefield"
+  
+  ],
+  "Goa": ["Britto's Baga Beach", "Vinayak Family Assagao", "Gunpowder Assagao", "Thalassa Vagator", "Mum's Kitchen Panjim", "Bhatti Village Nerul", "Fisherman's Wharf Cavelossim", "Café Bodega Panjim",
+    "Calcutta Restaurant Anjuna",
+    "La Plage Ashvem",
+    "A Reverie Calangute",
+    "Burger Factory Anjuna",
+    "Olive Bar Vagator",
+    "Saligao Stories",
+    "Cafe Bombay Anjuna",
+    "Souza Lobo Calangute"
+  ],
+  "Paris": ["Le Comptoir du Relais", "Breizh Café crêperie", "L'Ami Jean", "Septime", "Du Pain et des Idées bakery", "Pierre Hermé macarons", "Marché des Enfants Rouges", "Bouillon Pigalle",
+    "Frenchie Rue du Nil",
+    "L'Arpège",
+    "Café de Flore",
+    "La Maison Plisson",
+    "Astier brasserie",
+    "Chez Janou",
+    "Le Train Bleu Gare de Lyon",
+    "Le Servan"
+  ],
+  "Rome": ["Roscioli Salumeria", "Pizzarium Bonci", "Trapizzino Trastevere", "Da Enzo al 29", "Armando al Pantheon", "Gelateria del Teatro", "Mercato Testaccio", "Tonnarello Trastevere",
+    "Felice a Testaccio",
+    "Pierluigi seafood",
+    "Sora Lella Tiber Island",
+    "Antico Forno Roscioli",
+    "Il Pagliaccio",
+    "Salumeria Roscioli evening",
+    "Da Cesare al Casaletto",
+    "La Pergola (3-star)"
+  ],
+  "Barcelona": ["La Boqueria Market", "Bar Cañete", "Cervecería Catalana tapas", "Tickets El Born", "Quimet & Quimet", "Can Solé paella", "Bodega Biarritz", "El Xampanyet",
+    "Disfrutar",
+    "El Quim de la Boqueria",
+    "Bar Mut Eixample",
+    "Casa Lolea",
+    "La Cova Fumada",
+    "Bar del Pla",
+    "Pez Vela Barceloneta",
+    "Bar Pinotxo Boqueria"
+  ],
+  "Lisbon": ["Time Out Market Lisboa", "Cervejaria Ramiro", "Pastéis de Belém", "Taberna da Rua das Flores", "Manteigaria pastel de nata", "A Cevicheria", "Solar dos Presuntos", "Pinóquio",
+    "Belcanto by José Avillez",
+    "100 Maneiras",
+    "Cervejaria Trindade",
+    "Aqui Há Peixe Bairro Alto",
+    "Faz Frio fado dinner",
+    "O Velho Eurico Alfama",
+    "Cantinho do Avillez",
+    "Versailles Pastelaria"
+  ],
+  "London": ["Borough Market", "Dishoom Covent Garden", "Padella pasta", "Hawksmoor Seven Dials", "Brick Lane Beigel Bake", "St. JOHN Smithfield", "Gymkhana Mayfair", "The Wolseley",
+    "Sketch Mayfair",
+    "Ottolenghi Spitalfields",
+    "Hoppers Soho",
+    "Bocca di Lupo Soho",
+    "Smoking Goat Shoreditch",
+    "Bao Fitzrovia",
+    "Andrew Edmunds Soho",
+    "Maison Bertaux"
+  ],
+  "Bangkok": ["Jay Fai street Michelin", "Raan Jay Fai", "Tha Tien Market", "Chatuchak Weekend Market", "Nai Mong Hoy Tod", "Polo Fried Chicken", "Soei Restaurant", "Err Urban Rustic Thai",
+    "Gaggan Anand",
+    "Le Du",
+    "Sorn southern Thai",
+    "Krua Apsorn",
+    "Thip Samai pad thai",
+    "Soul Food Mahanakorn",
+    "100 Mahaseth",
+    "Issaya Siamese Club"
+  ],
+  "Bali (Canggu & Seminyak)": ["La Brisa Canggu", "Warung Bu Mi Canggu", "Sardine Seminyak", "La Lucciola Seminyak", "Crate Café Canggu", "Mason Canggu", "Mama San Seminyak", "Old Man's Canggu",
+    "Bambu Indah dinner",
+    "Petitenget restaurant",
+    "Sa'Mesa Italian Berawa",
+    "Café Vida Canggu",
+    "Milk & Madu Berawa",
+    "The Lawn Canggu",
+    "Single Fin Bingin (sunset)",
+    "Da Maria Seminyak"
+  ],
+  "Bali (Ubud)": ["Locavore Ubud", "Naughty Nuri's ribs", "Hujan Locale", "Warung Babi Guling Ibu Oka", "Clear Café Ubud", "Sari Organik", "Mozaic Beachclub", "Cinta Grill",
+    "Room4Dessert",
+    "Hujan Locale",
+    "Locavore NXT",
+    "Folk Pool & Gardens",
+    "Kismet Ubud",
+    "Watercress Ubud",
+    "Café Pomegranate",
+    "Sayuri Healing Food"
+  ],
+  "New York City": ["Katz's Delicatessen", "Joe's Pizza Bleecker", "Eleven Madison Park", "Xi'an Famous Foods", "Russ & Daughters", "Lombardi's Pizza", "Smorgasburg Williamsburg", "Levain Bakery",
+    "Peter Luger Steakhouse",
+    "Le Bernardin",
+    "Carbone Greenwich",
+    "Di Fara Pizza Brooklyn",
+    "Prince Street Pizza",
+    "Sweetgreen flagship",
+    "Momofuku Noodle Bar",
+    "Halal Guys 53rd & 6th"
+  ],
+  "Los Angeles": ["Bestia DTLA", "Guelaguetza Oaxacan", "Republique Hancock Park", "Sqirl Silverlake", "Nobu Malibu", "Guerrilla Tacos", "Jon & Vinny's Fairfax", "Howlin' Ray's Nashville hot chicken",
+    "Gjusta Venice bakery",
+    "Otium DTLA",
+    "Night + Market Song",
+    "Petit Trois Le Valley",
+    "Broken Spanish",
+    "Cassia Santa Monica",
+    "Grand Central Market DTLA",
+    "Rossoblu DTLA"
+  ],
+  "San Francisco": ["Tartine Bakery Mission", "Zuni Café", "State Bird Provisions", "Swan Oyster Depot", "Foreign Cinema Mission", "Saison", "Rich Table Hayes Valley", "The Progress",
+    "Humphry Slocombe ice cream",
+    "La Taqueria Mission",
+    "Benu (3-star Michelin)",
+    "Nopa Hayes Valley",
+    "Flour + Water",
+    "Chez Panisse Berkeley",
+    "Mister Jiu's Chinatown",
+    "Cotogna Jackson Square"
+  ],
+  "Grand Canyon": ["El Tovar Dining Room South Rim", "Bright Angel Restaurant", "Phantom Ranch Canteen inner canyon", "Yavapai Lodge Restaurant", "Maswik Food Court",
+    "Pine Country Restaurant Williams AZ",
+    "Cruisers Cafe Route 66 Williams",
+    "Red Raven Restaurant Williams",
+    "Plaza Bonita Williams",
+    "Hubbell Trading Post Ganado"
+  ],
+  "Las Vegas": ["Joël Robuchon MGM Grand", "é by José Andrés", "Momofuku Las Vegas", "Eggslut The Cosmopolitan", "Herbs & Rye local gem", "Lotus of Siam Thai",
+    "In-N-Out Burger classic",
+    "Sparrow + Wolf",
+    "Barry's Downtown Prime",
+    "CraftKitchen Henderson",
+    "Esther's Kitchen",
+    "Honey Salt",
+    "Yardbird Table & Bar",
+    "Bouchon Bistro The Venetian",
+    "Nacho Daddy",
+    "Glutton restaurant"
+  ],
+  "Miami": ["Versailles Cuban Little Havana", "KYU Asian BBQ Wynwood", "Cote Miami Korean Steakhouse", "Mandolin Aegean Bistro", "Zak the Baker Wynwood", "La Mar by Gastón Acurio",
+    "Eating House Coral Gables",
+    "Boia De",
+    "Alter Wynwood",
+    "Stubborn Seed South Beach",
+    "Ghee Indian Kitchen",
+    "Joe's Stone Crab South Beach",
+    "El Turco Brickell",
+    "Coyo Taco Wynwood",
+    "Perricone's Marketplace",
+    "Gigi Midtown"
+  ],
+  "Edinburgh": ["The Kitchin Leith", "Timberyard", "Cafe St Honoré", "Ondine seafood", "Cannonball Restaurant", "Dishoom Edinburgh", "The Honours brasserie", "Wedgwood the Restaurant",
+    "Grain Store",
+    "Cafe Marlayne",
+    "Valvona & Crolla deli",
+    "The Dome brasserie",
+    "Gardener's Cottage",
+    "Leith Chop House",
+    "Scran & Scallie Tom Kitchin pub",
+    "Hanedan Turkish"
+  ],
+  "Manchester": ["Mana Michelin", "Elnecot Ancoats", "Bundobust Piccadilly Indian street food", "Hawksmoor Manchester", "Mackie Mayor food hall", "Tartine Ancoats",
+    "Ply Northern Quarter",
+    "El Gato Negro tapas",
+    "Sugo pasta Ancoats",
+    "Rudy's Neapolitan Pizza",
+    "Erst wine bar Ancoats",
+    "Cultureplex food and bar",
+    "Baratxuri Ramsbottom pintxos",
+    "Native Manchester",
+    "Evelyn's café bar",
+    "Mana restaurant"
+  ],
+  "Oxford": ["The Cherwell Boathouse", "Quod Restaurant & Bar", "The Trout Inn Wolvercote", "Branca brasserie", "Brasserie Blanc", "Atomic Burger",
+    "Vaults & Garden café",
+    "The Oxford Kitchen",
+    "Arbequina tapas",
+    "Handle Bar café",
+    "Al-Shami Lebanese",
+    "Barefoot Summertown",
+    "Jericho Café",
+    "Pompette wine bar",
+    "The Bear Inn Oxford",
+    "Gee's brasserie"
+  ],
+  "Lake District": ["The Drunken Duck Inn Ambleside", "L'Enclume Cartmel 3-star", "Forest Side Grasmere", "Old Stamp House Ambleside", "Yan at Broadrayne farm café",
+    "Gilpin Hotel Lake House",
+    "The Punch Bowl Inn Crosthwaite",
+    "Homeground Coffee Windermere",
+    "Hawkshead Brewery tap room",
+    "The Hole in t'Wall Bowness",
+    "Rattle Gill Café Ambleside",
+    "Merienda Ambleside",
+    "The Brown Horse Inn Winster",
+    "Village Bakery Ambleside",
+    "Fellpack Keswick",
+    "The Royal Oak Bowness"
+  ],
+  "Birmingham": ["Lasan Indian fine dining", "Carters of Moseley Michelin", "Adam's Restaurant Michelin", "Opheem Michelin", "Asha's Indian", "Original Patty Men Digbeth",
+    "Purecraft Bar & Kitchen",
+    "The Wilderness tasting menu",
+    "Purnell's Bistro",
+    "Simpsons Michelin",
+    "Hawksmoor Birmingham",
+    "Digbeth Dining Club street food",
+    "Itihaas Indian heritage",
+    "Baked in Brick BBQ",
+    "10 Eleven restaurant",
+    "Zen Metro"
+  ],
+  "Mexico City": ["Pujol", "El Califa de León tacos", "Mercado de San Juan", "Contramar", "Quintonil", "Tacos El Vilsito", "Café de Tacuba", "Lardo Condesa",
+    "Maximo Bistrot",
+    "Rosetta Roma Norte",
+    "Sud 777 Pedregal",
+    "Lalo!",
+    "Taqueria Los Cocuyos",
+    "Azul Histórico",
+    "Caldos d.f.",
+    "Panaderia Rosetta"
+  ],
+  "Reykjavik": ["Bæjarins Beztu Pylsur hot dogs", "Sægreifinn lobster soup", "Dill Restaurant", "Matur og Drykkur", "Grillmarkaðurinn", "Café Loki", "Fish Company", "Sandholt bakery",
+    "Apotek Restaurant",
+    "Snaps Bistro",
+    "Kopar Restaurant",
+    "Coocoo's Nest",
+    "Reykjavik Roasters",
+    "Brauð & Co bakery",
+    "Mokka-Kaffi (oldest cafe)",
+    "Kex Hostel restaurant"
+  ],
+  "Cape Town": ["The Test Kitchen", "La Colombe Constantia", "Mzansi Langa", "Truth Coffee", "Kloof Street House", "The Pot Luck Club", "Karibu V&A Waterfront", "Bo-Kaap Kombuis",
+    "FYN Restaurant",
+    "Chefs Warehouse Bree St",
+    "The Codfather Camps Bay",
+    "Ocean Basket V&A",
+    "The Foodbarn Noordhoek",
+    "Hemelhuijs",
+    "Liquorice & Lime",
+    "Roundhouse Camps Bay"
+  ],
+  "Dubrovnik": ["Proto Restaurant", "Pantarul Lapad", "Konoba Dubrava", "Nautika Restaurant", "Restaurant 360", "Buža Bar cliffside", "Lady Pi-Pi", "Taj Mahal Bosnian",
+    "Above 5 Rooftop",
+    "Konoba Veranda",
+    "Kopun restaurant",
+    "Azur Asian fusion",
+    "Glorijet Mt Srd",
+    "Restaurant Dalmatino",
+    "Cele bar",
+    "Stradun Café"
+  ],
+  "Zanzibar": ["Forodhani Night Market", "The Rock Restaurant", "Lukmaan Stone Town", "Emerson Spice Tea House", "6 Degrees South", "Tamarind Restaurant", "Beit el Chai Café", "Mercury's Stone Town",
+    "Sandies Coral Beach",
+    "Spice Tour lunch",
+    "House of Spices Stone Town",
+    "Park Hyatt Stone Town dinner",
+    "Zanzibar Coffee House",
+    "Lazuli Stone Town",
+    "Kidude Restaurant",
+    "Ahaba Stone Town"
+  ],
+  "Amalfi Coast": ["Da Adolfo Positano", "La Tagliata Positano", "Lo Scoglio Nerano", "Da Gemma Amalfi", "Il Ritrovo Praiano", "Donna Rosa Montepertuso", "Ristorante Quattro Passi", "Sal de Riso pastry",
+    "Chez Black Positano",
+    "Le Sirenuse Champagne Bar",
+    "Marina Grande Amalfi",
+    "Il Refettorio Convento",
+    "Lo Guarracino Positano",
+    "Caffè Latino Amalfi",
+    "Andrea Pansa pastry (since 1830)",
+    "Ristorante La Caravella Amalfi"
+  ],
+  "Sicily (Palermo & Taormina)": ["Antica Focacceria San Francesco", "Ferro di Cavallo Palermo", "Bam Bar Taormina granita", "Osteria Nero d'Avola Taormina", "Vucciria Market street food", "Trattoria ai Cascinari", "Casa Grugno Taormina", "Pasticceria Cappello",
+    "Maccheroni Taormina",
+    "Granduca Taormina view",
+    "I Cuochini Palermo arancini",
+    "Cappello pastry Palermo",
+    "Trattoria del Pesce Fresco Palermo",
+    "Osteria Ballarò Palermo",
+    "Tischi Toschi Taormina",
+    "Bar Vitelli Savoca (Godfather)"
+  ],
+  "South Coast (Vík)": ["Suður-Vík Restaurant", "Halldorskaffi Vík", "Smiðjan Brugghús Vík", "Mia's Country Van", "Black Beach Restaurant", "Skool Beans Coffee", "Strondin Pub Vík", "Vík Cafe",
+    "Drangshlid sheep farm restaurant",
+    "Dyrhólaey Café",
+    "Hotel Rangá restaurant",
+    "Ströndin Café Vík",
+    "Hotel Vík restaurant",
+    "Soup Cellar Skogar",
+    "Halldorskaffi Vík",
+    "Hotel Klaustur restaurant"
+  ],
+
+  // ── CHINA ──
+  "Beijing": ["Quanjude Roast Duck (Qianmen)", "Da Dong Roast Duck", "Wangfujing Night Market", "Ghost Street (Gui Jie) hotpot", "Siji Minfu Peking Duck", "Dali Courtyard Hutong", "Baoyuan Dumpling House", "Huguosi snack street",
+    "Yi Zuo Yi Wang dumplings",
+    "Made in China (Grand Hyatt)",
+    "Mr Shi's Dumplings",
+    "Siji Minfu roast duck",
+    "Bianyifang Duck Restaurant (since 1416)",
+    "Crescent Moon Muslim Restaurant",
+    "Maison Boulud Beijing",
+    "TRB Hutong"
+  ],
+  "Shanghai": ["Din Tai Fung (xiaolongbao)", "Jia Jia Tang Bao soup dumplings", "Nanxiang Mantou Dian (Yu Garden)", "Lost Heaven Yunnan cuisine", "Ultraviolet by Paul Pairet", "Table No.1 by Jason Atherton", "Hai Di Lao Hotpot", "Mr & Mrs Bund",
+    "Jean-Georges Shanghai",
+    "Yong Yi Ting (Mandarin Oriental)",
+    "Fu 1088 Shanghai cuisine",
+    "Xiao Yang Sheng Jian (pan-fried buns)",
+    "Wu Guan Tang soup dumplings",
+    "Mercato by Jean-Georges",
+    "El Willy Spanish-Chinese",
+    "The Cannery craft beer & food"
+  ],
+  "Xi'an": ["Muslim Quarter lamb skewers", "De Fa Chang Dumpling Restaurant", "Tongshengxiang paomo soup", "Lao Suntong Noodle House (biangbiang noodles)", "Lao Mi Jia steamed cold noodles", "Fang Xiang Biang Biang Mian", "Laosunjia Steamed Stuffed Bun", "Jia San Guan rou jia mo",
+    "Xi Fu Ji steamed dumpling banquet",
+    "Lan Xiang Lou mutton paomo",
+    "Kai Yuan Fang night market",
+    "Yong Xing Fang food street",
+    "Huimin Street snacks",
+    "Defachang Dumpling Banquet",
+    "Small World Restaurant",
+    "Tang Dynasty Dinner Show"
+  ],
+  "Chengdu": ["Hotpot at Haidilao (Jinli branch)", "Chen Mapo Tofu (Renmin South Road)", "Long Chao Shou dumplings", "Zhong Shui Jiao sweet dumplings", "Dali Three Sisters hotpot", "Fuqi Feipian (Qingyang)", "Huang Cheng Lao Ma hotpot", "Tan Yu Tou fish hotpot",
+    "Ba Guo Bu Yi Sichuan banquet",
+    "Yu Zhi Lan Michelin 2-star",
+    "New Cantonment Sichuan cuisine",
+    "Sichuan Opera dinner show",
+    "Panda Base Cafe",
+    "Jinli Street street food",
+    "Kuanzhai Xiangzi teahouse snacks",
+    "Sichuan cuisine museum restaurant"
+  ],
+  "Guilin": ["Li River fish in Yangshuo", "Guilin rice noodle breakfast (guilin mifen)", "Impression Sanjie Liu dinner show", "Yangshuo Market night snacks", "Laozhai Hill sunset picnic", "West Street restaurants Yangshuo", "Cormorant fishing village dinner", "Zhengyang Pedestrian Street food",
+    "Osmanthus seafood restaurant",
+    "Guilin Beer Fish (yangshuo style)",
+    "Cooking Show at Cloud 9 Yangshuo",
+    "Pure Lotus vegetarian Guilin",
+    "Panya's Café Yangshuo",
+    "MC Blues Bar & Cafe Yangshuo",
+    "Rosewood Kitchen Yangshuo",
+    "River View Hotel restaurant"
+  ],
+
+  // ── SINGAPORE ──
+  "Marina Bay Sands": ["CE LA VI Sky Bar & Restaurant", "CUT by Wolfgang Puck", "Sands SkyPark Dining", "Bread Street Kitchen & Bar", "Koma Japanese Restaurant & Sushi Bar", "Adrift by David Myers", "Wakuda (Tetsuya Wakuda)", "Spago by Wolfgang Puck",
+    "Yardbird Southern Table & Bar",
+    "Long Bar at Raffles Hotel (nearby)",
+    "Lavo Italian Restaurant & Rooftop Bar",
+    "Rise restaurant buffet",
+    "DB Bistro & Oyster Bar",
+    "Chinois by Susur Lee",
+    "Renku bar",
+    "Marquee Singapore nightclub"
+  ],
+  "Sentosa Island": ["Tanjong Beach Club", "FOC Sentosa Spanish", "The Cliff at Sofitel", "Coastes Beach House", "Mykonos on the Bay", "PALIO at Hard Rock Hotel", "Forest (Equarius Hotel)", "Osia Steak & Seafood Grill",
+    "Il Lido Italian Dining",
+    "Wave House Beach Club",
+    "Saffron Indian Restaurant",
+    "Ocean Restaurant by Cat Cora",
+    "Synergie Cafe",
+    "Greenwood Fish Market",
+    "Lucky Beach Sentosa",
+    "PizzaExpress Sentosa"
+  ],
+  "Chinatown": ["Maxwell Food Centre (Tian Tian Hainanese Chicken Rice)", "Chinatown Complex Food Centre", "Hong Kong Street Chun Kee seafood", "Tong Heng egg tarts (since 1944)", "Lau Pa Sat satay hawker", "Amoy Street Food Centre", "Smith Street Taps craft beer", "Potato Head Singapore",
+    "Burnt Ends BBQ",
+    "Esquina tapas",
+    "Blue Ginger Peranakan",
+    "Tender Loving Crab",
+    "Momma Kong's crab",
+    "The 1925 Brewing Co.",
+    "Keong Saik Bakery",
+    "Jinmee Teahouse"
+  ],
+  "Orchard Road": ["Mandarin Gallery restaurants", "Din Tai Fung ION Orchard", "Crystal Jade La Mian Xiao Long Bao", "Tippling Club (Dempsey nearby)", "Wild Honey Scotts Square", "Antoinette Patisserie Penhas", "Iggy's at Hilton", "Takashimaya Food Hall basement",
+    "db Bistro & Oyster Bar (nearby MBS)",
+    "Violet Oon National Kitchen Orchard",
+    "Peach Garden ION Orchard",
+    "Sushi Kimura Orchard",
+    "Luke's Oyster Bar & Chop House",
+    "Dancing Crab Orchard",
+    "Straits Kitchen Grand Hyatt",
+    "Brotzeit German Bier Bar"
+  ],
+
+  // ── UAE ──
+  "Dubai": ["Al Hadheerah desert dinner (Bab Al Shams)", "Pierchic seafood over the sea", "Zuma Dubai DIFC", "Nobu Dubai Atlantis", "Trèsind Studio (Michelin)", "Nathan Outlaw at Al Mahara (Burj Al Arab)", "Logma Emirati breakfast", "Ravi Restaurant Satwa (institution since 1978)",
+    "Al Ustad Special Kabab (Deira since 1978)",
+    "Bu Qtair fresh fish shack (Jumeirah)",
+    "Bagatelle Dubai DIFC",
+    "COYA Dubai (Peruvian)",
+    "Clap Dubai (Japanese)",
+    "Reform Social & Grill",
+    "The Ivy Dubai",
+    "Hutong Dubai DIFC"
+  ],
+  "Abu Dhabi": ["Al Fanar Emirati Restaurant", "Li Beirut (Jumeirah at Etihad)", "Hakkasan Abu Dhabi", "Bord Eau (Shangri-La)", "Fishmarket (InterContinental)", "Azura Panoramic Lounge", "Shang Palace (Shangri-La)", "Soul Food by Reif",
+    "Tamba Indian Restaurant",
+    "The Grill at Park Hyatt",
+    "Cipriani Abu Dhabi",
+    "Zuma Abu Dhabi",
+    "Coya Abu Dhabi",
+    "Li Beirut Jumeirah",
+    "Vasco's (Hilton Abu Dhabi)",
+    "Al Arish Traditional Restaurant"
+  ],
+  "Desert Safari Dubai": ["Al Hadheerah Bab Al Shams dinner show", "Bedouin camp BBQ under the stars", "Al Maha Desert Resort dining", "Hatta Wadi Hub café", "The Nest at Hatta Dam", "Al Khayma Heritage Restaurant", "Timeless Bur Dubai (after safari)", "Ravi Restaurant Satwa (post-safari)",
+    "Arabic mezze feast at desert camp",
+    "Camel milk tasting at desert camp",
+    "Majlis tent coffee & dates",
+    "Heritage Village BBQ Abu Dhabi road"
+  ],
+  "Sharjah": ["Al Fanar Sharjah Emirati", "Bait Al Wakeel waterfront Sharjah", "Al Hisn Café", "Al Qasba Canal dining", "CIAO restaurant Al Majaz", "Yamanote Atelier Bakery", "Saffron Indian restaurant Sharjah", "Zahrat Libnan (Lebanese)",
+    "Al Nakheel seafood Sharjah",
+    "Sajway Lebanese shawarma",
+    "Al Majaz Amphitheatre food stalls",
+    "Blue Souk tea shops"
+  ],
+  "Fujairah": ["Al Meshwar Restaurant Fujairah", "Snoopy Island Seafood Restaurant", "Habeet Restaurant Fujairah", "Al Sharqi Suites dining", "Al Dawaar Rotary Restaurant", "Heritage Village food stalls Fujairah", "Khor Fakkan Beach Café", "Dibba Fish Market cookout",
+    "Hilton Fujairah Resort Al Samar",
+    "Le Méridien Al Aqah Beach",
+    "Masafi rest-stop fresh juices",
+    "Beit Al Mandi Yemeni rice"
+  ],
+  "Zurich": [
+  "Zeughauskeller traditional Swiss cuisine near Bahnhofstrasse",
+  "Haus Hiltl world's oldest vegetarian restaurant",
+  "Swiss Chuchi famous cheese fondue experience",
+  "Kronenhalle fine dining with famous artworks",
+  "Sternen Grill iconic Zurich bratwurst stand",
+  "Restaurant Kindli classic Swiss hospitality",
+  "Confiserie Sprüngli luxury chocolates and pastries",
+  "Raclette Factory authentic Swiss raclette dining"
+],
+
+"Lucerne": [
+  "Wirtshaus Galliker traditional Lucerne specialties",
+  "Old Swiss House schnitzel prepared tableside",
+  "Restaurant Balances riverside dining with Chapel Bridge views",
+  "Mill'Feuille lakeside brunch and coffee",
+  "Burgerstube Swiss fondue and local dishes",
+  "Restaurant Opus modern European cuisine",
+  "Pastarazzi authentic Italian dining",
+  "La Cucina Lucerne local favorite restaurant"
+],
+
+"Interlaken": [
+  "Husi Bierhaus Swiss beers and alpine cuisine",
+  "Restaurant Taverne traditional Swiss favorites",
+  "Goldener Anker cozy mountain dining",
+  "Ox Restaurant & Grill premium steaks",
+  "Little Thai authentic Thai cuisine",
+  "Aare Korean BBQ riverside dining",
+  "Layaly Beirut Lebanese specialties",
+  "Restaurant Laterne local Swiss comfort food"
+],
+
+"Grindelwald": [
+  "Barry's mountain-view dining experience",
+  "Restaurant Golden India Indian cuisine in the Alps",
+  "Alte Post traditional Swiss restaurant",
+  "Bebbis Restaurant local specialties",
+  "C und M Café famous coffee and pastries",
+  "Eigerbean Café artisan coffee stop",
+  "Onkel Tom's rustic alpine dining",
+  "Restaurant Glacier views of surrounding peaks"
+],
+
+"Zermatt": [
+  "Chez Vrony alpine gourmet dining with Matterhorn views",
+  "Findlerhof mountain-side Swiss cuisine",
+  "Restaurant Whymper-Stube traditional fondue and raclette",
+  "The Omnia Restaurant fine dining experience",
+  "Schäferstube famous lamb specialties",
+  "Du Pont local Swiss comfort food",
+  "Stockhorn Grill premium steakhouse",
+  "Restaurant Julen authentic Zermatt cuisine"
+],
+
+"Geneva": [
+  "Café du Centre famous seafood restaurant",
+  "Chez Ma Cousine popular rotisserie chicken spot",
+  "Restaurant Les Armures historic Swiss dining",
+  "Bayview Michelin-starred experience",
+  "Brasserie Lipp classic French brasserie",
+  "Izumi Geneva rooftop Japanese dining",
+  "Le Flacon modern fine dining",
+  "Cottage Café local Geneva favorite"
+],
+
+"Auckland": [
+  "Depot Eatery fresh New Zealand seafood",
+  "Amano artisan bakery and local cuisine",
+  "Sidart contemporary fine dining",
+  "Soul Bar waterfront dining experience",
+  "Federal Delicatessen New York-style comfort food",
+  "Cassia modern Indian cuisine",
+  "Baduzzi famous handmade meatballs",
+  "The Grove premium tasting menu experience"
+],
+
+"Queenstown": [
+  "Fergburger world-famous gourmet burgers",
+  "Botswana Butchery premium steakhouse",
+  "Blue Kanu Asian-Pacific fusion cuisine",
+  "Rata chef-inspired New Zealand dishes",
+  "The Cow rustic pizza restaurant",
+  "Yonder brunch and café favorite",
+  "Flame Bar & Grill famous ribs and steaks",
+  "Patagonia Chocolates desserts and ice cream"
+],
+
+"Wellington": [
+  "Logan Brown award-winning New Zealand cuisine",
+  "Ortega Fish Shack seafood specialists",
+  "Charley Noble wood-fired dining experience",
+  "The Crab Shack waterfront seafood restaurant",
+  "Loretta seasonal local dishes",
+  "Hippopotamus fine dining with harbour views",
+  "Field & Green modern European cuisine",
+  "Egmont Street Eatery local brunch favorite"
+],
+
+"Christchurch": [
+  "5th Street contemporary New Zealand cuisine",
+  "Twenty Seven Steps local seasonal menu",
+  "Fiddlesticks casual city dining",
+  "King of Snake Asian fusion restaurant",
+  "Little High Eatery food hall experience",
+  "Inati chef's tasting menu",
+  "Unknown Chapter Café artisan coffee spot",
+  "Dux Dine famous seafood and garden dining"
+],
+
+"Kuala Lumpur": [
+  "Jalan Alor famous street food market",
+  "Village Park Restaurant legendary nasi lemak",
+  "Madam Kwan's Malaysian comfort food",
+  "Restoran Rebung traditional Malay cuisine",
+  "Nasi Kandar Pelita local Indian-Muslim dishes",
+  "Bijan Bar & Restaurant upscale Malay dining",
+  "Opium KL Asian fusion experience",
+  "Merchant's Lane trendy Chinatown café"
+],
+
+"Penang": [
+  "Teksen Restaurant iconic Penang favorites",
+  "Sister Curry Mee famous local noodles",
+  "Line Clear Nasi Kandar legendary rice dishes",
+  "New Lane Hawker Centre street food paradise",
+  "China House café and bakery experience",
+  "Auntie Gaik Lean's award-winning Nyonya cuisine",
+  "Moh Teng Pheow Nyonya heritage dishes",
+  "Kimberley Street famous night food stalls"
+],
+
+"Langkawi": [
+  "Yellow Café beachfront dining experience",
+  "Wonderland Food Store seafood specialties",
+  "The Cliff Restaurant sunset ocean views",
+  "Pia's The Padi countryside dining",
+  "Scarborough Fish & Chips coastal favorite",
+  "Fat Cupid tropical fusion cuisine",
+  "Red Tomato casual international dining",
+  "Kayuputi luxury overwater restaurant"
+],
+
+"Manila": [
+  "Manam modern Filipino comfort food",
+  "The Aristocrat legendary Filipino restaurant",
+  "Barbara's Heritage Restaurant cultural dining experience",
+  "Cafe Adriatico classic Manila café",
+  "Mesa Filipino Moderne contemporary local cuisine",
+  "Blackbird fine dining in historic setting",
+  "Locavore modern Filipino flavors",
+  "Romulo Cafe family heritage recipes"
+],
+
+"Cebu": [
+  "House of Lechon famous Cebu roasted pork",
+  "Lantaw Floating Native Restaurant waterfront dining",
+  "Rico's Lechon spicy local specialty",
+  "Abaca Restaurant fine dining experience",
+  "La Vie Parisienne French-inspired café",
+  "AA BBQ local grilled seafood favorites",
+  "Tops Korean BBQ city-view dining",
+  "Pig & Palm modern international cuisine"
+],
+
+"Palawan": [
+  "Kinabuchs Grill local seafood specialties",
+  "KaLui Restaurant iconic Palawan dining",
+  "Badjao Seafront ocean-view restaurant",
+  "Art Café El Nido traveler favorite café",
+  "Bella Vita authentic Italian cuisine",
+  "Republica Sunset Bar beachside cocktails",
+  "Happiness Beach Bar Middle Eastern favorites",
+  "La Terrasse French-inspired dining"
+],
+
+"Buenos Aires": [
+  "Don Julio world-famous Argentine steakhouse",
+  "La Cabrera traditional parrilla experience",
+  "El Preferido modern Argentine cuisine",
+  "Cafe Tortoni historic coffee house",
+  "Parrilla Peña authentic local grill",
+  "Mishiguene award-winning Jewish-Argentine dining",
+  "Fogón Asado immersive steak experience",
+  "El Cuartito legendary Buenos Aires pizza"
+],
+
+"Mendoza": [
+  "1884 Restaurante by Francis Mallmann",
+  "Azafrán fine dining and wine pairings",
+  "Brindillas contemporary Argentine cuisine",
+  "Anna Bistro garden dining experience",
+  "Casa Vigil winery restaurant experience",
+  "La Lucia Grill traditional Argentine steaks",
+  "Fuente y Fonda local comfort food",
+  "Siete Cocinas regional Argentine flavors"
+],
+
+"Patagonia": [
+  "La Tablita famous Patagonian lamb",
+  "Viva La Pepa local artisan dining",
+  "Mako Fuegos y Vinos wine and grill experience",
+  "Cervecería Patagonia craft beer with mountain views",
+  "El Boliche de Alberto renowned steakhouse",
+  "Morfi Patagonia regional specialties",
+  "La Marca traditional Argentine cuisine",
+  "Parrilla Don Pichon panoramic dining views"
+],
+
+"Berlin": [
+  "Mustafa's Gemüse Kebap legendary street food",
+  "Curry 36 famous Berlin currywurst",
+  "Zur Letzten Instanz Berlin's oldest restaurant",
+  "NENI Berlin rooftop dining overlooking the city",
+  "Rutz Michelin-starred German cuisine",
+  "Cookies Cream vegetarian fine dining",
+  "Markthalle Neun artisan food market",
+  "KaDeWe gourmet food hall experience"
+],
+
+"Munich": [
+  "Hofbräuhaus traditional Bavarian beer hall",
+  "Augustiner Keller historic beer garden",
+  "Andechser am Dom Bavarian specialties",
+  "Tantris Michelin-starred fine dining",
+  "Brenner Grill Italian-German fusion",
+  "Schneider Bräuhaus authentic Munich dishes",
+  "Viktualienmarkt food stalls and local delicacies",
+  "Ratskeller München dining beneath city hall"
+],
+
+"Hamburg": [
+  "Fischereihafen Restaurant famous seafood dining",
+  "Bullerei modern German cuisine",
+  "Henssler & Henssler sushi and seafood specialists",
+  "Erika's Eck classic local comfort food",
+  "Old Commercial Room traditional Hamburg dishes",
+  "Brücke 10 iconic fish sandwiches",
+  "Jellyfish sustainable seafood restaurant",
+  "The Table Hamburg Michelin-starred experience"
+],
+
+"Frankfurt": [
+  "Apfelwein Wagner traditional apple wine tavern",
+  "Zum Gemalten Haus authentic German cuisine",
+  "Restaurant Lafleur Michelin-starred dining",
+  "MainNizza riverside Mediterranean restaurant",
+  "Kabuki Frankfurt Japanese teppanyaki experience",
+  "Moseleck local Frankfurt institution",
+  "Bidlabu modern European cuisine",
+  "Seven Swans sustainable fine dining"
+],
+"Kyoto": [
+  "Nishiki Market famous Kyoto street food",
+  "Kikunoi traditional kaiseki dining",
+  "Gion Karyo authentic Japanese cuisine",
+  "Menbaka Fire Ramen unique ramen experience",
+  "Omen Kyoto handmade udon noodles",
+  "Kyoto Engine Ramen local favorite",
+  "Musashi Sushi affordable sushi spot",
+  "Inoda Coffee historic Kyoto café"
+],
+
+"Osaka": [
+  "Dotonbori street food paradise",
+  "Mizuno famous okonomiyaki restaurant",
+  "Harukoma Sushi local sushi favorite",
+  "Kani Doraku iconic crab restaurant",
+  "Matsusakagyu Yakiniku M premium wagyu dining",
+  "Takoyaki Wanaka famous takoyaki stall",
+  "Ajinoya Osaka-style okonomiyaki",
+  "Endo Sushi Market fresh seafood experience"
+],
+
+"Nara": [
+  "Edogawa Naramachi traditional Japanese cuisine",
+  "Maguro Koya famous tuna dishes",
+  "Mizuya Chaya tea house experience",
+  "Kakinoha Sushi Honpo local specialty sushi",
+  "Yamato-an handmade soba noodles",
+  "Nakatanidou famous mochi shop",
+  "Shizuka traditional Nara meals",
+  "Cafe Etranger Narad local café"
+],
+
+"Hakone": [
+  "Bakery & Table Hakone lakeside dining",
+  "Gora Brewery & Grill craft beer experience",
+  "Yamagusuri traditional Japanese meals",
+  "Itoh Dining by NOBU luxury teppanyaki",
+  "Tamura Ginkatsutei tofu specialties",
+  "Salon de Thé Rosage dessert café",
+  "Hatsuhana Soba famous noodles",
+  "La Terrazza lakeside Italian cuisine"
+],
+
+"Beijing": [
+  "Quanjude legendary Peking duck restaurant",
+  "Da Dong modern Peking duck dining",
+  "HaiDiLao famous hotpot experience",
+  "Siji Minfu local Beijing specialties",
+  "Bianyifang historic roast duck restaurant",
+  "Din Tai Fung premium dumplings",
+  "Jing Yaa Tang modern Chinese cuisine",
+  "Little Yunnan regional Chinese flavors"
+],
+
+"Shanghai": [
+  "Jia Jia Tang Bao famous soup dumplings",
+  "Lost Heaven Yunnan cuisine experience",
+  "Din Tai Fung premium dumplings",
+  "Ultraviolet by Paul Pairet luxury dining",
+  "Jesse Restaurant local Shanghai cuisine",
+  "Fu He Hui vegetarian fine dining",
+  "Xibo Xinjiang specialties",
+  "Mercato Italian dining on the Bund"
+],
+
+"Chengdu": [
+  "Chen Mapo Tofu iconic Sichuan cuisine",
+  "Shu Jiu Xiang famous hotpot",
+  "Huangcheng Laoma traditional hotpot",
+  "Long Chao Shou local dumpling house",
+  "Yu's Family Kitchen fine dining",
+  "Qin Shan Zhai vegetarian specialties",
+  "Tianfu Square food district",
+  "Bashu Dazhaimen authentic Sichuan flavors"
+],
+
+"Guilin": [
+  "Chunji Roasted Goose local specialty",
+  "Ming Gui Mi Fen famous rice noodles",
+  "Lakeside Café riverside dining",
+  "Rosemary Café western-Chinese fusion",
+  "A Gan Restaurant local Guilin cuisine",
+  "McFound local favorite restaurant",
+  "Cloud 9 Restaurant rooftop views",
+  "Li River Cuisine traditional dishes"
+],
+
+"Athens": [
+  "Ta Karamanlidika traditional Greek cuisine",
+  "O Thanasis famous souvlaki restaurant",
+  "Klimataria authentic Greek dining",
+  "Avli neighborhood restaurant",
+  "Feyrouz Middle Eastern specialties",
+  "Lithos Tavern local favorites",
+  "Ergon House modern Greek cuisine",
+  "Strofi Acropolis-view dining"
+],
+
+"Mykonos": [
+  "Kiki's Tavern famous seaside dining",
+  "Nammos luxury beach restaurant",
+  "M-eating contemporary Greek cuisine",
+  "Interni stylish island dining",
+  "Niko's Taverna local seafood",
+  "Avra Restaurant romantic courtyard dining",
+  "Scorpios beach club restaurant",
+  "Sea Satin Market waterfront dining"
+],
+
+"Santorini": [
+  "Metaxi Mas authentic Greek cuisine",
+  "Ammoudi Fish Tavern seaside seafood",
+  "Selene fine dining experience",
+  "Argo Restaurant caldera-view dining",
+  "Naoussa traditional Santorini cuisine",
+  "Lucky's Souvlakis local favorite",
+  "Katina Tavern fresh seafood",
+  "La Maison romantic sunset dining"
+],
+
+"Nice": [
+  "La Petite Maison Mediterranean dining",
+  "Le Safari local Niçoise cuisine",
+  "Chez Acchiardo family-run restaurant",
+  "Boccaccio seafood specialties",
+  "Peixes seafood and wine experience",
+  "Le Plongeoir ocean-view dining",
+  "Fenocchio famous gelato shop",
+  "La Voglia Italian favorites"
+],
+
+"Lyon": [
+  "Le Bouchon des Filles traditional Lyon cuisine",
+  "Brasserie Georges historic French dining",
+  "Daniel et Denise authentic bouchon experience",
+  "Café Comptoir Abel local specialties",
+  "La Mère Brazier Michelin-starred cuisine",
+  "Les Halles de Lyon food market",
+  "Le Sud Mediterranean flavors",
+  "Restaurant Têtedoie panoramic dining"
+],
+
+"Madrid": [
+  "Sobrino de Botín world's oldest restaurant",
+  "Casa Dani famous Spanish tortilla",
+  "Mercado de San Miguel food market",
+  "Chocolatería San Ginés churros and chocolate",
+  "DiverXO Michelin-starred experience",
+  "Taberna El Sur local tapas",
+  "Casa Lucio iconic Spanish dining",
+  "Sala de Despiece modern cuisine"
+],
+
+"Seville": [
+  "El Rinconcillo historic tapas bar",
+  "Eslava creative Spanish cuisine",
+  "La Brunilda local favorite restaurant",
+  "Casa Morales traditional tapas",
+  "Abades Triana riverside dining",
+  "Bodeguita Romero famous sandwiches",
+  "Bar Alfalfa authentic tapas",
+  "La Azotea modern Andalusian cuisine"
+]
+};
+const fallbackFoodSpots = [
+  "Local landmark restaurant", "Top-rated street food market", "Iconic bakery near old town",
+  "Famous riverside seafood spot", "Heritage tea house", "Renowned rooftop bar", "Beloved family-run trattoria"
+];
+window.cityFoodSpots = cityFoodSpots;
+
+function getFoodPoolForCity(cityName) {
+  if (!cityName) return fallbackFoodSpots.slice();
+  if (cityFoodSpots[cityName]) return cityFoodSpots[cityName].slice();
+  // try partial matching for parenthesized names
+  const wantedNorm = gqgNormalizeName(cityName);
+  for (const k of Object.keys(cityFoodSpots)) {
+    if (gqgNormalizeName(k) === wantedNorm || gqgNormalizeName(k).includes(wantedNorm) || wantedNorm.includes(gqgNormalizeName(k))) {
+      return cityFoodSpots[k].slice();
+    }
+  }
+  return fallbackFoodSpots.slice();
+}
+
+function gqgNormalizeName(value) {
+  return String(value || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function splitCityNameParts(name) {
+  return String(name || '')
+    .replace(/[()]/g, ' ')
+    .split(/\s*(?:&|\/|,|\+|\band\b|\bor\b|–|-|:)\s*/i)
+    .map(gqgNormalizeName)
+    .filter(part => part.length >= 3);
+}
+
+function findCityRecordByName(name, country) {
+  const wanted = gqgNormalizeName(name);
+  const countries = country && cityDB[country] ? [country] : Object.keys(cityDB);
+  for (const ctry of countries) {
+    for (const city of (cityDB[ctry] || [])) {
+      if (gqgNormalizeName(city.name) === wanted) return Object.assign({}, city, { country: ctry });
+    }
+  }
+  return null;
+}
+
+function resolveKnownCity(input, country) {
+  const text = gqgNormalizeName(input);
+  if (!text) return null;
+
+  for (const alias in cityAliasMap) {
+    if (text === alias || text.includes(alias)) {
+      const target = cityAliasMap[alias];
+      return findCityRecordByName(target, country) || { name: target, score: 8.0, desc: 'Matched from your search', country };
+    }
+  }
+
+  const countryCities = country && cityDB[country] ? cityDB[country] : [];
+  const candidates = [...countryCities, ...Object.keys(cityLandmarks).map(name => ({ name, safety: 8.0, desc: '' }))];
+  for (const city of candidates) {
+    const key = gqgNormalizeName(city.name);
+    const parts = splitCityNameParts(city.name);
+    if (text === key || text.includes(key) || key.includes(text) || parts.some(part => text.includes(part) || part.includes(text))) {
+      const record = findCityRecordByName(city.name, country) || city;
+      return Object.assign({}, record, { name: city.name, country });
+    }
+  }
+  return null;
+}
+
+function pickBestCityForPrefs(country, prefs) {
+  const raw = (cityDB[country] || cityDB._default || []).slice();
+  if (!raw.length) return { name: 'Tokyo', safety: 9.5, desc: 'Reliable default destination', country: 'Japan' };
+  return raw.map(c => {
+    const scored = typeof scoreCityForPrefs === 'function' ? scoreCityForPrefs(c, prefs || {}) : { total: c.safety || 8 };
+    return Object.assign({}, c, { match: scored.total, country });
+  }).sort((a, b) => b.match - a.match)[0];
+}
+
+function getRealPlacePool(city, country, prefs) {
+  const resolved = resolveKnownCity(city && city.name ? city.name : '', country) || city || pickBestCityForPrefs(country, prefs || {});
+  if (resolved && cityLandmarks[resolved.name]) return cityLandmarks[resolved.name].slice();
+  const best = pickBestCityForPrefs(country, prefs || {});
+  if (best && cityLandmarks[best.name]) return cityLandmarks[best.name].slice();
+  const firstKnown = Object.keys(cityLandmarks).find(k => Array.isArray(cityLandmarks[k]) && cityLandmarks[k].length && !['Capital City','Old Town / Historic Quarter','Coastal Resort','Mountain Retreat','Cultural Hub','Hidden Gem Village'].includes(k));
+  return firstKnown ? cityLandmarks[firstKnown].slice() : realPlaceFallbackPool.slice();
+}
+
+function seededShuffle(arr, seedStr) {
+  let s = 0;
+  for (let i = 0; i < String(seedStr).length; i++) s = (s * 31 + String(seedStr).charCodeAt(i)) >>> 0;
+  const a = (arr || []).slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    s = (s * 1103515245 + 12345) >>> 0;
+    const j = s % (i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.length ? a : realPlaceFallbackPool.slice();
+}
+
+function placeTag(name) {
+  const n = gqgNormalizeName(name);
+  if (/market|restaurant|cafe|café|food|dinner|bar|pub|bazaar|street|yokocho|fish|snack|wine|beer/.test(n)) return 'Food';
+  if (/beach|lake|park|garden|forest|waterfall|fjord|island|gorge|mountain|trail|hike|viewpoint|river|desert|safari|national park/.test(n)) return 'Adventure';
+  if (/palace|fort|temple|shrine|cathedral|church|mosque|museum|castle|ruins|monastery|old town|heritage|tomb|memorial/.test(n)) return 'Landmark';
+  if (/mall|shop|bazaar|market|souq|district|quarter/.test(n)) return 'Shopping';
+  if (/club|night|bar|pub|dj|casino/.test(n)) return 'Nightlife';
+  return 'Culture';
+}
+
+function placeSafetyScore(placeName, cityName) {
+  // Base safety from city DB if available
+  let base = 7.5;
+  if (window._gqgItinerary && window._gqgItinerary.city) {
+    const cityObj = window._gqgItinerary.city;
+    if (typeof cityObj.safety === 'number') base = cityObj.safety;
+  }
+  // Small deterministic variance per place name (±1.0) so each stop feels unique
+  const hash = Array.from(placeName).reduce((acc, c) => acc + c.charCodeAt(0), 0);
+  const variance = ((hash % 21) - 10) / 10; // -1.0 to +1.0
+  const score = Math.min(10, Math.max(4.0, base + variance));
+  const rounded = Math.round(score * 10) / 10;
+  // Label & colour class
+  let label, cls;
+  if (rounded >= 8.5)      { label = 'Very Safe'; cls = 'safety-high'; }
+  else if (rounded >= 7.0) { label = 'Safe';      cls = 'safety-mid';  }
+  else if (rounded >= 5.5) { label = 'Moderate';  cls = 'safety-warn'; }
+  else                     { label = 'Caution';   cls = 'safety-low';  }
+  return { score: rounded, label, cls };
+}
+
+const genericActivityPatterns = [
+  /local breakfast/i, /city walk/i, /sunset viewpoint/i, /traditional dinner/i, /explore old town/i,
+  /cultural experience/i, /hotel check/i, /morning market/i, /botanical garden/i, /long lunch/i,
+  /riverside reading/i, /heritage walk/i, /coffee tasting/i, /boutique browsing/i, /cozy bistro/i,
+  /train escape/i, /village lunch/i, /wellness session/i, /healthy brunch/i, /modern art museum/i,
+  /wine bar/i, /slow breakfast/i, /indie quarter/i, /riverwalk/i, /live jazz/i, /sunrise hike/i,
+  /local bakery/i, /souvenir hunt/i, /farewell dinner/i, /^morning$/i, /^afternoon$/i, /^evening$/i,
+  /^landmark$/i, /^museum$/i, /^market$/i, /^beach$/i, /^old town$/i, /^viewpoint$/i
+];
+
+function looksGenericPlaceName(name) {
+  const value = String(name || '').trim();
+  if (!value) return true;
+  if (genericActivityPatterns.some(rx => rx.test(value))) return true;
+  const words = value.split(/\s+/).filter(Boolean);
+  const hasSpecificSignal = /[A-Z][a-z].*\s+[A-Z][a-z]|\(|'|’|-|&|\d|\b(Saint|St\.?|Mount|Lake|Fort|Palace|Temple|Museum|Market|Beach|Park|Road|Street|Square|Cathedral|Mosque|Shrine|Castle|Gorge|Falls|Bay|Island|District|Quarter|National)\b/.test(value);
+  return words.length <= 2 && !hasSpecificSignal;
+}
+
+function buildActivityFromPlace(place, time, flow, cityName, vibe) {
+  const action = flow ? `${flow} at ${place}` : `Explore ${place}`;
+  return {
+    time,
+    name: place,
+    desc: `${action}. This is a real, named stop in ${cityName} that fits your ${vibe || 'travel'} preference.`,
+    tag: placeTag(place)
+  };
+}
+
+function buildNamedItineraryData(opts) {
+  const prefs = Object.assign({}, window.userPrefs || {}, opts || {});
+  const country = prefs.country || 'Japan';
+  const days = Number(prefs.days || 5);
+  const vibe = (prefs.vibe || 'chill').toLowerCase();
+  const requested = prefs.focusCity || (window._gqgSelectedCity && window._gqgSelectedCity.name) || '';
+  const city = resolveKnownCity(requested, country) || pickBestCityForPrefs(country, prefs);
+  const templateKey = vibeTemplateMap[vibe] || vibe;
+  const template = dayTemplates[templateKey] || dayTemplates.chill;
+  const colors = ['#00d4b8', '#8b5cf6', '#f0c040', '#ff6b6b', '#38bdf8', '#f472b6'];
+  const pool = seededShuffle(getRealPlacePool(city, country, prefs), `${city.name}|${country}|${vibe}|${days}`);
+  const timeSlots = ['Morning', 'Afternoon', 'Evening'];
+  const dayList = [];
+  for (let i = 0; i < days; i++) {
+    const tpl = template[i % template.length];
+    const activities = timeSlots.map((time, j) => {
+      const place = pool[(i * 3 + j) % pool.length];
+      const flow = (tpl.activities || [])[j];
+      return buildActivityFromPlace(place, time, flow, city.name, vibe);
+    });
+    dayList.push({
+      day: i + 1,
+      title: `${city.name}: ${tpl.dayTitle}`,
+      color: colors[i % colors.length],
+      activities
+    });
+  }
+  return {
+    destination_highlight: `${city.name} gives you a real ${vibe} route through named places like ${pool.slice(0, 3).join(', ')}.`,
+    weather_tip: `Check live conditions before long outdoor stops such as ${pool.find(p => /park|beach|trail|fort|view|lake|garden/i.test(p)) || pool[0]}.`,
+    tips: [
+      { icon: '💰', label: 'Money', text: `Keep small cash for entries, snacks and rides near ${pool[0]}.` },
+      { icon: '🚇', label: 'Transport', text: `Cluster nearby stops around ${city.name} to avoid backtracking.` },
+      { icon: '🍜', label: 'Food', text: `Use named markets or restaurant streets in the plan for safer food choices.` },
+      { icon: '🏛️', label: 'Culture', text: `Dress modestly at religious or heritage sites like ${pool.find(p => /temple|mosque|church|cathedral|shrine|palace|fort/i.test(p)) || pool[0]}.` },
+      { icon: '🛡️', label: 'Safety', text: `Stay on official routes and pre-book popular timed entries.` }
+    ],
+    days: dayList,
+    _focusCity: city.name
+  };
+}
+
+function enforceNamedPlaces(data, opts) {
+  const prefs = Object.assign({}, window.userPrefs || {}, opts || {});
+  if (!data || !Array.isArray(data.days) || !data.days.length) return buildNamedItineraryData(prefs);
+  const country = prefs.country || 'Japan';
+  const vibe = (prefs.vibe || 'chill').toLowerCase();
+  const requested = prefs.focusCity || data._focusCity || (window._gqgSelectedCity && window._gqgSelectedCity.name) || '';
+  const city = resolveKnownCity(requested, country) || pickBestCityForPrefs(country, prefs);
+  const pool = seededShuffle(getRealPlacePool(city, country, prefs), `${city.name}|${country}|${vibe}|enforce`);
+  let placeIndex = 0;
+  const timeSlots = ['Morning', 'Afternoon', 'Evening'];
+  data._focusCity = city.name;
+  data.days = data.days.map((day, idx) => {
+    const sourceActs = Array.isArray(day.activities) && day.activities.length ? day.activities :
+      (Array.isArray(day.schedule) ? day.schedule.map(s => ({ time: s.time, name: s.place || s.name, desc: s.activity || s.desc, tag: s.tag })) : []);
+    const acts = timeSlots.map((time, j) => {
+      const original = sourceActs[j] || {};
+      let name = original.name || original.place || '';
+      if (looksGenericPlaceName(name)) name = pool[placeIndex++ % pool.length];
+      const desc = String(original.desc || original.activity || '').trim();
+      return {
+        time: original.time || time,
+        name,
+        desc: desc && desc.toLowerCase().includes(String(name).toLowerCase()) ? desc : `${desc ? desc + ' ' : ''}Plan this stop at ${name}, a real named place in ${city.name}.`,
+        tag: original.tag && original.tag !== '...' ? original.tag : placeTag(name)
+      };
+    });
+    return Object.assign({}, day, {
+      day: day.day || idx + 1,
+      title: day.title || `${city.name} named-place route`,
+      color: day.color || ['#00d4b8', '#8b5cf6', '#f0c040', '#ff6b6b'][idx % 4],
+      activities: acts
+    });
+  });
+  if (!data.destination_highlight) data.destination_highlight = `${city.name} is planned with actual named stops, including ${pool.slice(0, 3).join(', ')}.`;
+  if (!Array.isArray(data.tips)) data.tips = buildNamedItineraryData(prefs).tips;
+  return data;
+}
+
+
+function hexToRgba(hex, alpha) {
+  let c = hex.replace('#','');
+  if(c.length===3) c=c[0]+c[0]+c[1]+c[1]+c[2]+c[2];
+  const r=parseInt(c.substring(0,2),16), g=parseInt(c.substring(2,4),16), b=parseInt(c.substring(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ===== LOCAL PHRASE CARD =====
+const _languageMap = {
+  // India
+  'India': { lang:'Hindi', flag:'🇮🇳', script:'Devanagari' },
+
+'Bangalore': { lang:'Kannada', flag:'IN', script:'Kannada' },
+'Bengaluru': { lang:'Kannada', flag:'IN', script:'Kannada' },
+'Mysore': { lang:'Kannada', flag:'IN', script:'Kannada' },
+'Mysuru': { lang:'Kannada', flag:'IN', script:'Kannada' },
+
+'Chennai': { lang:'Tamil', flag:'🇮🇳', script:'Tamil' },
+'Madurai': { lang:'Tamil', flag:'🇮🇳', script:'Tamil' },
+
+'Hyderabad': { lang:'Telugu', flag:'🇮🇳', script:'Telugu' },
+'Visakhapatnam': { lang:'Telugu', flag:'🇮🇳', script:'Telugu' },
+
+'Kochi': { lang:'Malayalam', flag:'🇮🇳', script:'Malayalam' },
+'Munnar': { lang:'Malayalam', flag:'🇮🇳', script:'Malayalam' },
+
+'Mumbai': { lang:'Marathi', flag:'🇮🇳', script:'Devanagari' },
+'Pune': { lang:'Marathi', flag:'🇮🇳', script:'Devanagari' },
+
+'Kolkata': { lang:'Bengali', flag:'🇮🇳', script:'Bengali' },
+'Darjeeling': { lang:'Bengali', flag:'🇮🇳', script:'Bengali' },
+
+'Ahmedabad': { lang:'Gujarati', flag:'🇮🇳', script:'Gujarati' },
+
+'Jaipur': { lang:'Hindi', flag:'🇮🇳', script:'Devanagari' },
+
+'Goa': { lang:'Konkani', flag:'🇮🇳', script:'Latin' },
+  // Thailand
+  'Thailand': { lang:'Thai', flag:'🇹🇭', script:'Thai' },
+  'Bangkok':  { lang:'Thai', flag:'🇹🇭', script:'Thai' },
+  'Chiang Mai': { lang:'Thai', flag:'🇹🇭', script:'Thai' },
+  'Phuket': { lang:'Thai', flag:'🇹🇭', script:'Thai' },
+  'Pai':    { lang:'Thai', flag:'🇹🇭', script:'Thai' },
+  'Krabi & Railay': { lang:'Thai', flag:'🇹🇭', script:'Thai' },
+  'Koh Samui': { lang:'Thai', flag:'🇹🇭', script:'Thai' },
+  'Ayutthaya': { lang:'Thai', flag:'🇹🇭', script:'Thai' },
+  // Turkey
+'Turkey': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Istanbul': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Antalya': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Cappadocia': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Ankara': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Izmir': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Bodrum': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+'Pamukkale': { lang:'Turkish', flag:'🇹🇷', script:'Latin' },
+  // Japan
+  'Japan': { lang:'Japanese', flag:'🇯🇵', script:'Hiragana' },
+  'Tokyo': { lang:'Japanese', flag:'🇯🇵', script:'Hiragana' },
+  'Kyoto': { lang:'Japanese', flag:'🇯🇵', script:'Hiragana' },
+  'Osaka': { lang:'Japanese', flag:'🇯🇵', script:'Hiragana' },
+  'Nara':  { lang:'Japanese', flag:'🇯🇵', script:'Hiragana' },
+  'Hokkaido (Sapporo & Niseko)': { lang:'Japanese', flag:'🇯🇵', script:'Hiragana' },
+  // Italy
+  'Italy': { lang:'Italian', flag:'🇮🇹', script:'Latin' },
+  'Rome':  { lang:'Italian', flag:'🇮🇹', script:'Latin' },
+  'Florence': { lang:'Italian', flag:'🇮🇹', script:'Latin' },
+  'Venice':  { lang:'Italian', flag:'🇮🇹', script:'Latin' },
+  'Amalfi Coast': { lang:'Italian', flag:'🇮🇹', script:'Latin' },
+  // France
+  'France': { lang:'French', flag:'🇫🇷', script:'Latin' },
+  'Paris':  { lang:'French', flag:'🇫🇷', script:'Latin' },
+  'Lyon':   { lang:'French', flag:'🇫🇷', script:'Latin' },
+  // Spain
+  'Spain':   { lang:'Spanish', flag:'🇪🇸', script:'Latin' },
+  'Barcelona': { lang:'Catalan/Spanish', flag:'🇪🇸', script:'Latin' },
+  'Madrid':  { lang:'Spanish', flag:'🇪🇸', script:'Latin' },
+  'Seville': { lang:'Spanish', flag:'🇪🇸', script:'Latin' },
+  'Granada': { lang:'Spanish', flag:'🇪🇸', script:'Latin' },
+  // Portugal
+  'Lisbon':  { lang:'Portuguese', flag:'🇵🇹', script:'Latin' },
+  'Porto':   { lang:'Portuguese', flag:'🇵🇹', script:'Latin' },
+  // Greece
+  'Greece':    { lang:'Greek', flag:'🇬🇷', script:'Greek' },
+  'Athens':    { lang:'Greek', flag:'🇬🇷', script:'Greek' },
+  'Santorini': { lang:'Greek', flag:'🇬🇷', script:'Greek' },
+  'Mykonos':   { lang:'Greek', flag:'🇬🇷', script:'Greek' },
+
+  // Morocco
+  'Morocco':   { lang:'Moroccan Arabic', flag:'🇲🇦', script:'Arabic' },
+  'Marrakech': { lang:'Moroccan Arabic', flag:'🇲🇦', script:'Arabic' },
+  'Chefchaouen': { lang:'Moroccan Arabic', flag:'🇲🇦', script:'Arabic' },
+  // Vietnam
+  'Vietnam':   { lang:'Vietnamese', flag:'🇻🇳', script:'Latin' },
+  'Hanoi':     { lang:'Vietnamese', flag:'🇻🇳', script:'Latin' },
+  'Hoi An':    { lang:'Vietnamese', flag:'🇻🇳', script:'Latin' },
+  'Ho Chi Minh City': { lang:'Vietnamese', flag:'🇻🇳', script:'Latin' },
+  // Indonesia / Bali
+  'Bali (Ubud)': { lang:'Balinese/Indonesian', flag:'🇮🇩', script:'Latin' },
+  'Bali (Canggu & Seminyak)': { lang:'Balinese/Indonesian', flag:'🇮🇩', script:'Latin' },
+  // Peru
+  'Cusco': { lang:'Quechua/Spanish', flag:'🇵🇪', script:'Latin' },
+  'Lima':  { lang:'Spanish', flag:'🇵🇪', script:'Latin' },
+  // China
+  'China':     { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
+  'Beijing':   { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
+  'Shanghai':  { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
+  'Xi\'an':     { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
+  'Zhangjiajie National Forest Park': { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
+  'Guilin':    { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
+  'Chengdu':   { lang:'Mandarin Chinese', flag:'🇨🇳', script:'Chinese' },
+  // Germany
+'Germany': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Berlin': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Munich': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Hamburg': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Cologne': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Frankfurt': { lang:'German', flag:'🇩🇪', script:'Latin' },
+'Heidelberg': { lang:'German', flag:'🇩🇪', script:'Latin' },
+
+// Switzerland
+'Switzerland': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Zurich': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Lucerne': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Interlaken': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Grindelwald': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Zermatt': { lang:'German', flag:'🇨🇭', script:'Latin' },
+'Geneva': { lang:'French', flag:'🇨🇭', script:'Latin' },
+
+// Argentina
+'Argentina': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Buenos Aires': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Bariloche': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Mendoza': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'El Calafate': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Ushuaia': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+'Puerto Iguazú': { lang:'Spanish', flag:'🇦🇷', script:'Latin' },
+
+// Philippines
+'Philippines': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Manila': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Boracay': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Palawan': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Cebu': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Bohol': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+'Siargao': { lang:'Filipino', flag:'🇵🇭', script:'Latin' },
+
+// Malaysia
+'Malaysia': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Kuala Lumpur': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Langkawi': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Penang': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Cameron Highlands': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Kota Kinabalu': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+'Malacca': { lang:'Malay', flag:'🇲🇾', script:'Latin' },
+
+// New Zealand
+'New Zealand': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Auckland': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Queenstown': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Rotorua': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Wellington': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Christchurch': { lang:'English', flag:'🇳🇿', script:'Latin' },
+'Wanaka': { lang:'English', flag:'🇳🇿', script:'Latin' },
+
+// South Africa
+'South Africa': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Cape Town': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Johannesburg': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Durban': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Kruger National Park': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Stellenbosch': { lang:'English', flag:'🇿🇦', script:'Latin' },
+'Garden Route': { lang:'English', flag:'🇿🇦', script:'Latin' },
+  // Singapore
+  'Singapore': { lang:'English/Mandarin/Malay', flag:'🇸🇬', script:'Latin' },
+  'Marina Bay Sands': { lang:'English', flag:'🇸🇬', script:'Latin' },
+  'Sentosa Island':   { lang:'English', flag:'🇸🇬', script:'Latin' },
+  'Gardens by the Bay': { lang:'English', flag:'🇸🇬', script:'Latin' },
+  'Chinatown':        { lang:'English/Mandarin', flag:'🇸🇬', script:'Latin' },
+  'Orchard Road':     { lang:'English', flag:'🇸🇬', script:'Latin' },
+  'Singapore Zoo & Night Safari': { lang:'English', flag:'🇸🇬', script:'Latin' },
+  // UAE
+  // South Korea
+  'South Korea': { lang:'Korean', flag:'🇰🇷', script:'Hangul' },
+  'Seoul':     { lang:'Korean', flag:'🇰🇷', script:'Hangul' },
+  'Gyeongju':  { lang:'Korean', flag:'🇰🇷', script:'Hangul' },
+  'Busan':     { lang:'Korean', flag:'🇰🇷', script:'Hangul' },
+  'Jeju':      { lang:'Korean', flag:'🇰🇷', script:'Hangul' },
+  'Daegu':     { lang:'Korean', flag:'🇰🇷', script:'Hangul' },
+  'Incheon':   { lang:'Korean', flag:'🇰🇷', script:'Hangul' },
+  // UAE
+  'UAE':            { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
+  'Dubai':          { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
+  'Abu Dhabi':      { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
+  'Palm Jumeirah':  { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
+  'Desert Safari Dubai': { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
+  'Sharjah':        { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
+  'Fujairah':       { lang:'Arabic', flag:'🇦🇪', script:'Arabic' },
+  // Egypt
+'Egypt': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Cairo': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Giza': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Luxor': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Aswan': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Alexandria': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Sharm El Sheikh': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+'Hurghada': { lang:'Arabic', flag:'🇪🇬', script:'Arabic' },
+  // Default
+  '_default': { lang:'Local Language', flag:'🌍', script:'Latin' },
+};
+
+const _phraseDB = {
+  'Japanese': [
+    { type:'Greeting',  local:'こんにちは', roman:'Konnichiwa', meaning:'Hello / Good day' },
+    { type:'Ordering',  local:'これをください', roman:'Kore o kudasai', meaning:'I\'ll have this one, please' },
+    { type:'Directions', local:'〜はどこですか？', roman:'~ wa doko desu ka?', meaning:'Where is ~ ?' },
+    { type:'Bargaining', local:'もう少し安くできますか？', roman:'Mō sukoshi yasuku dekimasu ka?', meaning:'Can you make it a bit cheaper?' },
+    { type:'Thank You', local:'ありがとうございます', roman:'Arigatō gozaimasu', meaning:'Thank you very much' },
+  ],
+  'German': [
+  { type:'Greeting', local:'Hallo / Guten Tag', roman:'—', meaning:'Hello / Good day' },
+  { type:'Ordering', local:'Ich möchte ___, bitte', roman:'—', meaning:'I would like ___, please' },
+  { type:'Directions', local:'Wo ist ___?', roman:'—', meaning:'Where is ___?' },
+  { type:'Bargaining', local:'Können Sie den Preis senken?', roman:'—', meaning:'Can you lower the price?' },
+  { type:'Thank You', local:'Vielen Dank', roman:'—', meaning:'Thank you very much' },
+],
+
+'Malay': [
+  { type:'Greeting', local:'Selamat pagi', roman:'—', meaning:'Good morning' },
+  { type:'Ordering', local:'Saya mahu ___', roman:'—', meaning:'I would like ___' },
+  { type:'Directions', local:'Di mana ___?', roman:'—', meaning:'Where is ___?' },
+  { type:'Bargaining', local:'Boleh kurang harga?', roman:'—', meaning:'Can you lower the price?' },
+  { type:'Thank You', local:'Terima kasih', roman:'—', meaning:'Thank you' },
+],
+
+'Filipino': [
+  { type:'Greeting', local:'Kumusta', roman:'—', meaning:'Hello' },
+  { type:'Ordering', local:'Gusto ko ng ___', roman:'—', meaning:'I would like ___' },
+  { type:'Directions', local:'Nasaan ang ___?', roman:'—', meaning:'Where is ___?' },
+  { type:'Bargaining', local:'Pwede bang mas mura?', roman:'—', meaning:'Can it be cheaper?' },
+  { type:'Thank You', local:'Salamat', roman:'—', meaning:'Thank you' },
+],
+  'Thai': [
+    { type:'Greeting',  local:'สวัสดีครับ/ค่ะ', roman:'Sawasdee krab / ka', meaning:'Hello (krab = male, ka = female)' },
+    { type:'Ordering',  local:'ขอ___หน่อยได้ไหม', roman:'Kho ___ noi dai mai', meaning:'Can I have ___ please?' },
+    { type:'Directions', local:'___ อยู่ที่ไหน', roman:'___ yuu tee nai', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'ลดราคาได้ไหม', roman:'Lot rakha dai mai', meaning:'Can you lower the price?' },
+    { type:'Thank You', local:'ขอบคุณครับ/ค่ะ', roman:'Khob khun krab / ka', meaning:'Thank you' },
+  ],
+  'Hindi': [
+    { type:'Greeting',  local:'नमस्ते', roman:'Namaste', meaning:'Hello / Greetings (with folded hands)' },
+    { type:'Ordering',  local:'मुझे ___ चाहिए', roman:'Mujhe ___ chahiye', meaning:'I would like ___' },
+    { type:'Directions', local:'___ कहाँ है?', roman:'___ kahaan hai?', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'थोड़ा कम करो', roman:'Thoda kam karo', meaning:'Please reduce the price a little' },
+    { type:'Thank You', local:'धन्यवाद', roman:'Dhanyavaad', meaning:'Thank you' },
+  ],
+  'Italian': [
+    { type:'Greeting',  local:'Ciao / Buongiorno', roman:'—', meaning:'Hi (casual) / Good morning (formal)' },
+    { type:'Ordering',  local:'Un/Una ___, per favore', roman:'—', meaning:'One ___, please' },
+    { type:'Directions', local:'Dov\'è ___?', roman:'—', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'Può farmi un prezzo migliore?', roman:'—', meaning:'Can you give me a better price?' },
+    { type:'Thank You', local:'Grazie mille', roman:'—', meaning:'Thank you very much' },
+  ],
+  'French': [
+    { type:'Greeting',  local:'Bonjour / Bonsoir', roman:'—', meaning:'Hello / Good evening' },
+    { type:'Ordering',  local:'Je voudrais ___, s\'il vous plaît', roman:'Zhuh voo-DRAY', meaning:'I would like ___, please' },
+    { type:'Directions', local:'Où est ___?', roman:'Oo eh', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'Vous pouvez faire un geste?', roman:'Voo pooveh fair un zhest', meaning:'Can you do something (on the price)?' },
+    { type:'Thank You', local:'Merci beaucoup', roman:'Mare-see bo-KOO', meaning:'Thank you very much' },
+  ],
+  'Spanish': [
+    { type:'Greeting',  local:'Hola / Buenos días', roman:'O-la / BWAY-nos DEE-as', meaning:'Hello / Good morning' },
+    { type:'Ordering',  local:'Quisiera ___, por favor', roman:'Kee-SYEH-ra', meaning:'I\'d like ___, please' },
+    { type:'Directions', local:'¿Dónde está ___?', roman:'DON-deh es-TA', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'¿Me hace un descuento?', roman:'Meh AH-theh oon des-KWEN-to', meaning:'Can you give me a discount?' },
+    { type:'Thank You', local:'Muchas gracias', roman:'MOO-chas GRA-thyahs', meaning:'Thank you very much' },
+  ],
+  'Portuguese': [
+    { type:'Greeting',  local:'Olá / Bom dia', roman:'O-LAH / bom JEE-ah', meaning:'Hello / Good morning' },
+    { type:'Ordering',  local:'Queria ___, por favor', roman:'Keh-REE-ah', meaning:'I\'d like ___, please' },
+    { type:'Directions', local:'Onde fica ___?', roman:'ON-jeh FEE-kah', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'Pode fazer um desconto?', roman:'PO-deh fah-ZAIR', meaning:'Can you give a discount?' },
+    { type:'Thank You', local:'Muito obrigado/a', roman:'MWEE-too oh-bree-GAH-doo', meaning:'Thank you very much' },
+  ],
+  'Greek': [
+    { type:'Greeting',  local:'Γεια σας / Γεια σου', roman:'Ya sas / Ya soo', meaning:'Hello (formal / informal)' },
+    { type:'Ordering',  local:'Θα ήθελα ___, παρακαλώ', roman:'Tha ithela ___, parakalo', meaning:'I would like ___, please' },
+    { type:'Directions', local:'Πού είναι ___?', roman:'Poo einai', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'Μπορείτε να κάνετε έκπτωση;', roman:'Boreete na kanete ekptosi?', meaning:'Can you make a discount?' },
+    { type:'Thank You', local:'Ευχαριστώ πολύ', roman:'Efharisto poli', meaning:'Thank you very much' },
+  ],
+  'Turkish': [
+    { type:'Greeting',  local:'Merhaba / İyi günler', roman:'Mer-HA-ba / ee GYUN-ler', meaning:'Hello / Good day' },
+    { type:'Ordering',  local:'___ istiyorum, lütfen', roman:'is-tee-YO-room, LYUT-fen', meaning:'I want ___, please' },
+    { type:'Directions', local:'___ nerede?', roman:'NEH-reh-deh', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'İndirim yapabilir misiniz?', roman:'in-dee-REEM yah-pah-bi-LEER', meaning:'Can you give a discount?' },
+    { type:'Thank You', local:'Çok teşekkürler', roman:'CHOK teh-sheh-KYUR-ler', meaning:'Thank you very much' },
+  ],
+  'Moroccan Arabic': [
+    { type:'Greeting',  local:'السلام عليكم', roman:'As-salamu alaykum', meaning:'Peace be upon you (universal greeting)' },
+    { type:'Ordering',  local:'عطيني ___ عافاك', roman:'Atini ___ afak', meaning:'Give me ___ please' },
+    { type:'Directions', local:'فين كاين ___؟', roman:'Fin kayn ___?', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'حط لي في السعر', roman:'Hatt li f-ssar', meaning:'Bring down the price for me' },
+    { type:'Thank You', local:'شكراً بزاف', roman:'Shukran bezzaf', meaning:'Thank you very much' },
+  ],
+  'Vietnamese': [
+    { type:'Greeting',  local:'Xin chào', roman:'Sin chow', meaning:'Hello' },
+    { type:'Ordering',  local:'Cho tôi ___ với ạ', roman:'Cho toy ___ voi ah', meaning:'Please give me ___' },
+    { type:'Directions', local:'___ ở đâu?', roman:'___ uh dow?', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'Bớt giá được không?', roman:'But ya-dur kong', meaning:'Can you lower the price?' },
+    { type:'Thank You', local:'Cảm ơn nhiều', roman:'Gahm un nyew', meaning:'Thank you very much' },
+  ],
+  'Mandarin Chinese': [
+    { type:'Greeting',  local:'你好', roman:'Nǐ hǎo', meaning:'Hello' },
+    { type:'Ordering',  local:'我要这个，谢谢', roman:'Wǒ yào zhège, xièxie', meaning:'I\'ll have this one, thank you' },
+    { type:'Directions', local:'___在哪里？', roman:'___ zài nǎlǐ?', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'能便宜一点吗？', roman:'Néng piányí yīdiǎn ma?', meaning:'Can you make it a bit cheaper?' },
+    { type:'Thank You', local:'非常感谢', roman:'Fēicháng gǎnxiè', meaning:'Thank you very much' },
+  ],
+  'Arabic': [
+    { type:'Greeting',  local:'السلام عليكم', roman:'As-salamu alaykum', meaning:'Peace be upon you (universal greeting)' },
+    { type:'Ordering',  local:'أريد هذا من فضلك', roman:'Urid hatha min fadlak', meaning:'I\'d like this one, please' },
+    { type:'Directions', local:'أين ___؟', roman:'Ayna ___?', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'هل يمكنك تخفيض السعر؟', roman:'Hal yumkinuka takhfid as-si\'r?', meaning:'Can you lower the price?' },
+    { type:'Thank You', local:'شكراً جزيلاً', roman:'Shukran jazilan', meaning:'Thank you very much' },
+  ],
+  'Korean': [
+    { type:'Greeting',   local:'안녕하세요', roman:'Annyeonghaseyo', meaning:'Hello (polite greeting)' },
+    { type:'Ordering',   local:'이것 주세요', roman:'Igeot juseyo', meaning:'Please give me this one' },
+    { type:'Directions', local:'___이/가 어디에 있어요?', roman:'___ i/ga eodie isseoyo?', meaning:'Where is ___?' },
+    { type:'Bargaining', local:'조금 깎아 주세요', roman:'Jogeum kkakka juseyo', meaning:'Please give me a small discount' },
+    { type:'Thank You',  local:'감사합니다', roman:'Gamsahamnida', meaning:'Thank you (formal)' },
+  ],
+  '_default': [
+    { type:'Greeting',  local:'Hello', roman:'—', meaning:'A warm greeting to locals goes a long way' },
+    { type:'Ordering',  local:'One of this, please', roman:'—', meaning:'Point and smile — always works!' },
+    { type:'Directions', local:'Where is ___?', roman:'—', meaning:'Show on a map if needed' },
+    { type:'Bargaining', local:'Best price?', roman:'—', meaning:'Friendly haggling — smile first' },
+    { type:'Thank You', local:'Thank you!', roman:'—', meaning:'Always appreciated everywhere' },
+  ],
+  'Kannada': [
+  { type:'Greeting', local:'ನಮಸ್ಕಾರ', roman:'Namaskara', meaning:'Hello / Greetings' },
+  { type:'Ordering', local:'ನನಗೆ ___ ಬೇಕು', roman:'Nanage ___ beku', meaning:'I would like ___' },
+  { type:'Directions', local:'___ ಎಲ್ಲಿದೆ?', roman:'___ ellide?', meaning:'Where is ___?' },
+  { type:'Bargaining', local:'ಸ್ವಲ್ಪ ಕಡಿಮೆ ಮಾಡುತ್ತೀರಾ?', roman:'Swalpa kadime maduttira?', meaning:'Can you reduce the price a little?' },
+  { type:'Thank You', local:'ಧನ್ಯವಾದಗಳು', roman:'Dhanyavadagalu', meaning:'Thank you very much' },
+],
+'Tamil': [
+  { type:'Greeting', local:'வணக்கம்', roman:'Vanakkam', meaning:'Hello / Greetings' },
+  { type:'Ordering', local:'எனக்கு ___ வேண்டும்', roman:'Enakku ___ vendum', meaning:'I would like ___' },
+  { type:'Directions', local:'___ எங்கே உள்ளது?', roman:'___ enge ulladhu?', meaning:'Where is ___?' },
+  { type:'Bargaining', local:'கொஞ்சம் குறைக்க முடியுமா?', roman:'Konjam kuraikka mudiyuma?', meaning:'Can you reduce the price a little?' },
+  { type:'Thank You', local:'நன்றி', roman:'Nandri', meaning:'Thank you' },
+],
+'Telugu': [
+  { type:'Greeting', local:'నమస్కారం', roman:'Namaskaram', meaning:'Hello / Greetings' },
+  { type:'Ordering', local:'నాకు ___ కావాలి', roman:'Naaku ___ kaavali', meaning:'I would like ___' },
+  { type:'Directions', local:'___ ఎక్కడ ఉంది?', roman:'___ ekkada undi?', meaning:'Where is ___?' },
+  { type:'Bargaining', local:'కొంచెం తగ్గించగలరా?', roman:'Konchem tagginchagalara?', meaning:'Can you reduce the price?' },
+  { type:'Thank You', local:'ధన్యవాదాలు', roman:'Dhanyavaadalu', meaning:'Thank you very much' },
+],
+
+};
+
+const _phraseTypeColors = {
+  'Greeting':  { bg:'rgba(0,212,184,0.13)', border:'rgba(0,212,184,0.4)', color:'#00d4b8' },
+  'Ordering':  { bg:'rgba(240,192,64,0.13)', border:'rgba(240,192,64,0.4)', color:'#f0c040' },
+  'Directions':{ bg:'rgba(139,92,246,0.13)', border:'rgba(139,92,246,0.4)', color:'#a78bfa' },
+  'Bargaining':{ bg:'rgba(255,107,107,0.13)', border:'rgba(255,107,107,0.4)', color:'#ff9a9a' },
+  'Thank You': { bg:'rgba(52,211,153,0.13)', border:'rgba(52,211,153,0.4)', color:'#6ee7b7' },
+};
+
+function getLanguageInfo(cityName) {
+  if (!cityName) return _languageMap['_default'];
+  // exact match
+  if (_languageMap[cityName]) return _languageMap[cityName];
+  // country match
+  const itin = window._gqgItinerary;
+  if (itin && itin.country && _languageMap[itin.country]) return _languageMap[itin.country];
+  return _languageMap['_default'];
+}
+
+function getPhrases(cityName) {
+  const langInfo = getLanguageInfo(cityName);
+  console.log(cityName, langInfo);
+  // Try full lang string first, then each part split by /
+  if (_phraseDB[langInfo.lang]) return _phraseDB[langInfo.lang];
+  const parts = langInfo.lang.split('/').map(p => p.trim());
+  for (const part of parts) {
+    if (_phraseDB[part]) return _phraseDB[part];
+  }
+  return _phraseDB['_default'];
+}
+
+function buildPhraseCard(cityName, dayIdx) {
+  const langInfo = getLanguageInfo(cityName);
+  const phrases = getPhrases(cityName);
+  const cardId = `phraseCard_d${dayIdx}`;
+
+  // Build tag list for this language
+  const parts = (langInfo.lang || '').split('/').map(p => p.trim());
+  let tags = [];
+  for (const part of parts) {
+    const mapped = _langBCP47[part] || _langBCP47[langInfo.lang];
+    if (mapped) tags = tags.concat(mapped);
+  }
+
+  // Check if browser actually has a voice for this language
+  const hasVoice = tags.length > 0 && !!_getVoiceForLangs(tags);
+
+  // Clean text for TTS — strip placeholders and punctuation that read as noise
+  function ttsText(raw) {
+    return raw
+      .replace(/___/g, '')          // fill-in blanks → silence
+      .replace(/[/\\~？！]/g, ' ')  // slashes, tildes, CJK punct → space
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const rows = phrases.map((p, i) => {
+    const col = _phraseTypeColors[p.type] || _phraseTypeColors['Greeting'];
+    const hasRoman = p.roman && p.roman !== '—';
+    const cleaned = ttsText(p.local);
+    const speakBtn = hasVoice
+      ? `<button class="phrase-speak-btn" title="Listen" onclick="event.stopPropagation();speakPhrase('${cleaned.replace(/'/g,"\\'")}', '${langInfo.lang}', this)">🔊</button>`
+      : '';
+    return `
+      <div class="phrase-row"${hasVoice ? ` onclick="speakPhrase('${cleaned.replace(/'/g,"\\'")}', '${langInfo.lang}', this)"` : ''}>
+        <span class="phrase-type-badge" style="background:${col.bg};border:1px solid ${col.border};color:${col.color}">${p.type}</span>
+        <div class="phrase-content">
+          <div class="phrase-local">${p.local}</div>
+          ${hasRoman ? `<div class="phrase-roman">${p.roman}</div>` : ''}
+          <div class="phrase-meaning">${p.meaning}</div>
+        </div>
+        ${speakBtn}
+      </div>
+    `;
+  }).join('');
+
+  const subLabel = hasVoice ? '5 essential phrases · tap 🔊 to hear' : '5 essential phrases';
+
+  return `
+    <div class="phrase-card" id="${cardId}">
+      <div class="phrase-card-header" onclick="togglePhraseCard('${cardId}')">
+        <span class="phrase-card-flag">${langInfo.flag}</span>
+        <div class="phrase-card-title-wrap">
+          <div class="phrase-card-title">🗣 Local Phrases · ${langInfo.lang}</div>
+          <div class="phrase-card-sub">${subLabel}</div>
+        </div>
+        <span class="phrase-card-toggle">▾</span>
+      </div>
+      <div class="phrase-card-body">
+        ${rows}
+      </div>
+    </div>
+  `;
+}
+
+function togglePhraseCard(id) {
+  const card = document.getElementById(id);
+  if (!card) return;
+  card.classList.toggle('open');
+}
+
+// ── Language → ordered list of BCP-47 tags to try ──────────────────────────
+const _langBCP47 = {
+  'Japanese':                ['ja-JP','ja'],
+  'Thai':                    ['th-TH','th'],
+  'Mandarin Chinese':        ['zh-CN','zh-Hans-CN','zh-TW','zh'],
+  'Mandarin':                ['zh-CN','zh-Hans-CN','zh-TW','zh'],
+  'Chinese':                 ['zh-CN','zh-Hans-CN','zh-TW','zh'],
+  'Arabic':                  ['ar-AE','ar-SA','ar-EG','ar'],
+  'Moroccan Arabic':         ['ar-MA','ar'],
+  'Hindi':                   ['hi-IN','hi'],
+  'Korean':                  ['ko-KR','ko'],
+  'Vietnamese':              ['vi-VN','vi'],
+  'Indonesian':              ['id-ID','id'],
+  'Balinese/Indonesian':     ['id-ID','id'],
+  'Italian':                 ['it-IT','it'],
+  'French':                  ['fr-FR','fr'],
+  'Spanish':                 ['es-ES','es-MX','es'],
+  'Catalan/Spanish':         ['ca-ES','es-ES','es'],
+  'Portuguese':              ['pt-PT','pt-BR','pt'],
+  'Greek':                   ['el-GR','el'],
+  'Turkish':                 ['tr-TR','tr'],
+  'Russian':                 ['ru-RU','ru'],
+  'German':                  ['de-DE','de'],
+  'Dutch':                   ['nl-NL','nl'],
+  'Polish':                  ['pl-PL','pl'],
+  'Swedish':                 ['sv-SE','sv'],
+  'Norwegian':               ['nb-NO','nn-NO','no'],
+  'Danish':                  ['da-DK','da'],
+  'Hebrew':                  ['he-IL','he'],
+  'Malayalam':               ['ml-IN','ml'],
+  'Quechua/Spanish':         ['qu-PE','es-PE','es'],
+  'English/Mandarin/Malay':  ['zh-CN','zh','ms-MY','ms','en-SG','en'],
+  'English/Mandarin':        ['zh-CN','zh','en-SG','en'],
+  'English':                 ['en-GB','en-US','en'],
+  'Tagalog':                 ['fil-PH','tl-PH','en-PH'],
+  'Swahili':                 ['sw-KE','sw'],
+  'Malay': ['ms-MY','ms'],
+'Filipino': ['fil-PH','tl-PH','en-PH'],
+'Maori': ['mi-NZ','mi','en-NZ'],
+'Zulu': ['zu-ZA','zu','en-ZA'],
+'Arabic': ['ar-AE','ar-SA','ar-EG','ar'],
+'Kannada': ['kn-IN','kn'],
+'Tamil': ['ta-IN','ta'],
+'Telugu': ['te-IN','te'],
+'Malayalam': ['ml-IN','ml'],
+'Marathi': ['mr-IN','mr'],
+'Bengali': ['bn-IN','bn'],
+'Gujarati': ['gu-IN','gu'],
+'Konkani': ['kok-IN','kok']
+};
+
+// Wait for voices to load, then resolve best voice for a BCP-47 tag list
+function _getVoiceForLangs(tags) {
+  const voices = window.speechSynthesis.getVoices();
+  for (const tag of tags) {
+    const exact = voices.find(v => v.lang === tag);
+    if (exact) return exact;
+  }
+  // Fallback: prefix match (e.g. 'zh' matches 'zh-CN')
+  for (const tag of tags) {
+    const prefix = voices.find(v => v.lang.startsWith(tag.split('-')[0]));
+    if (prefix) return prefix;
+  }
+  return null;
+}
+
+function _doSpeak(text, langHint, btn) {
+  const parts = (langHint || '').split('/').map(p => p.trim());
+  let tags = [];
+  for (const part of parts) {
+    const mapped = _langBCP47[part] || _langBCP47[langHint];
+    if (mapped) tags = tags.concat(mapped);
+  }
+  if (!tags.length) tags = ['en-US'];
+
+  const voice = _getVoiceForLangs(tags);
+
+  // Chrome bug: after cancel(), speak() sometimes fires instantly with no audio
+  // for non-Latin scripts. The fix is to NOT cancel if already idle, and use
+  // a small setTimeout so the engine fully resets before the new utterance.
+  const fire = () => {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.rate  = 0.82;
+    utter.pitch = 1.0;
+    if (voice) {
+      utter.voice = voice;
+      utter.lang  = voice.lang;
+    } else {
+      utter.lang = tags[0];
+    }
+    if (btn) {
+      btn.classList.add('speaking');
+      const done = () => btn.classList.remove('speaking');
+      utter.onend   = done;
+      utter.onerror = done;
+    }
+    window.speechSynthesis.speak(utter);
+  };
+
+  // Always cancel first, then wait one event-loop tick before speaking.
+  // This is the key fix for Chrome/Android dropping CJK & Thai audio.
+  window.speechSynthesis.cancel();
+  setTimeout(fire, 50);
+}
+async function speakPhraseAPI(text){
+
+    const response = await fetch(
+        "http://127.0.0.1:5001/speak",
+        {
+            method:"POST",
+            headers:{
+                "Content-Type":"application/json"
+            },
+            body:JSON.stringify({text})
+        }
+    );
+
+    const blob = await response.blob();
+    const audio = new Audio(
+        URL.createObjectURL(blob)
+    );
+
+    audio.play();
+}
+
+function speakPhrase(text, langHint, el) {
+  async function speakPhrase(text, langHint, el) {
+
+    await speakPhraseAPI(text);
+    return;
+}
+
+  if (!window.speechSynthesis) return;
+  const btn = el && el.classList.contains('phrase-speak-btn') ? el : (el && el.querySelector('.phrase-speak-btn'));
+
+  const trySpeak = () => _doSpeak(text, langHint, btn);
+
+  const voices = window.speechSynthesis.getVoices();
+  if (voices && voices.length > 0) {
+    trySpeak();
+  } else {
+    // Voices not ready — register listener AND set a timeout fallback
+    let fired = false;
+    const go = () => { if (fired) return; fired = true; trySpeak(); };
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.onvoiceschanged = null;
+      go();
+    };
+    setTimeout(go, 500);
+  }
+}
+
+// ====== Build itinerary algorithm (deterministic) ======
+function buildPuzzleItinerary() {
+  const prefs = window.userPrefs || {};
+  const days = prefs.days || 7;
+  const vibe = (prefs.vibe || 'chill').toLowerCase();
+  const country = prefs.country || 'Japan';
+  const budget = prefs.budgetFormatted || (prefs.budget ? prefs.budget.toLocaleString() : '—');
+  const custom = document.getElementById('p5customCity').value.trim();
+  let city = custom ? resolveKnownCity(custom, country) : window._gqgSelectedCity;
+  if (!city && window._gqgSelectedCity) city = resolveKnownCity(window._gqgSelectedCity.name, country) || window._gqgSelectedCity;
+  if (!city) {
+    const first = (window._gqgCities||[])[0];
+    city = first ? (resolveKnownCity(first.name, country) || first) : pickBestCityForPrefs(country, prefs);
+  }
+  const notes = document.getElementById('p5notes').value.trim();
+
+  // Pick template (fallback to chill)
+  const templateKey = vibeTemplateMap[vibe] || vibe;
+  const template = dayTemplates[templateKey] || dayTemplates.chill;
+  const meta = vibeMeta[vibe] || vibeMeta.chill;
+
+  // Build N days — use REAL named places from cityLandmarks for the activity slots
+  const dayList = [];
+  const pool = getRealPlacePool(city, country, prefs);
+  // Shuffle deterministically per city+vibe so same trip gives same plan
+  const shuffled = seededShuffle(pool, city.name + '|' + vibe + '|' + days);
+  // Deduplicate ACROSS days: walk through shuffled pool linearly, only reuse once exhausted.
+  const usedActivities = new Set();
+  let actCursor = 0;
+  function nextActivity() {
+    if (!shuffled.length) return 'Local landmark';
+    // find first unused
+    for (let tries = 0; tries < shuffled.length; tries++) {
+      const cand = shuffled[(actCursor + tries) % shuffled.length];
+      if (!usedActivities.has(cand)) {
+        actCursor = (actCursor + tries + 1) % shuffled.length;
+        usedActivities.add(cand);
+        return cand;
+      }
+    }
+    // pool exhausted: add area/neighborhood variants to avoid repeats
+    const suffixes = [' (east side)', ' (old quarter)', ' (waterfront area)', ' (city center)', ' (north district)', ' (south end)'];
+    for (let s = 0; s < suffixes.length; s++) {
+      const variant = shuffled[actCursor % shuffled.length] + suffixes[s];
+      if (!usedActivities.has(variant)) {
+        usedActivities.add(variant);
+        actCursor = (actCursor + 1) % shuffled.length;
+        return variant;
+      }
+    }
+    usedActivities.clear();
+    actCursor = 0;
+    const cand = shuffled[0];
+    actCursor = 1;
+    usedActivities.add(cand);
+    return cand;
+  }
+
+  // Food spots — also deduped across days
+  const foodPool = seededShuffle(getFoodPoolForCity(city.name), city.name + '|food|' + days);
+  const usedFoods = new Set();
+  let foodCursor = 0;
+  function nextFood() {
+    if (!foodPool.length) return 'Local restaurant';
+    for (let tries = 0; tries < foodPool.length; tries++) {
+      const cand = foodPool[(foodCursor + tries) % foodPool.length];
+      if (!usedFoods.has(cand)) {
+        foodCursor = (foodCursor + tries + 1) % foodPool.length;
+        usedFoods.add(cand);
+        return cand;
+      }
+    }
+    const foodSuffixes = [' (branch 2)', ' (rooftop)', ' (garden terrace)', ' (downtown)', ' (harbour side)', ' (market stall)'];
+    for (let s = 0; s < foodSuffixes.length; s++) {
+      const variant = foodPool[foodCursor % foodPool.length] + foodSuffixes[s];
+      if (!usedFoods.has(variant)) {
+        usedFoods.add(variant);
+        foodCursor = (foodCursor + 1) % foodPool.length;
+        return variant;
+      }
+    }
+    usedFoods.clear();
+    foodCursor = 0;
+    const cand = foodPool[0];
+    foodCursor = 1;
+    usedFoods.add(cand);
+    return cand;
+  }
+
+  for (let i=0;i<days;i++) {
+    const t = template[i % template.length];
+    const baseCost = vibe==='luxury'?180:vibe==='party'?110:vibe==='nature'?70:90;
+    // Pick 4 distinct landmarks for the day (deduped across the whole trip)
+    const picks = [];
+    for (let k=0;k<4;k++) picks.push(nextActivity());
+    // Pick 3 distinct food spots for the day
+    const foods = [nextFood(), nextFood(), nextFood(), nextFood()];
+    dayList.push({
+      n:i+1,
+      title:t.dayTitle,
+      activities:picks,         // <-- real named places, no repeats across days
+      foods:foods,              // <-- real named restaurants/markets per day
+      genericFlow:t.activities, // keep original flow labels for context
+      costEstimate:baseCost + Math.floor(Math.random()*20),
+    });
+  }
+
+  // Render page 6
+  const titleEl = document.getElementById('p6title');
+  titleEl.innerHTML = `${city.name}, <em>${days} days</em>`;
+  document.getElementById('p6subtitle').textContent =
+    `A ${meta.adj} ${vibe} trip · budget around ${budget}`;
+  document.getElementById('p6quote').textContent =
+    `"${days} ${meta.adj} days exploring ${city.name}'s best ${vibe==='nature'?'trails and viewpoints':vibe==='party'?'nightlife and beach scenes':'neighborhoods and hidden corners'}. ` +
+    `You'll move at an easy pace${notes?` — and we kept your note in mind: "${notes}"`:''}.`;
+
+  // Summary — anchor everything to the user's actual stated budget & vibe
+  const totalCost = dayList.reduce((s,d)=>s+d.costEstimate,0);
+  const userBudgetNum = Number(prefs.budget) || 0;
+  const userBudgetLabel = prefs.budgetFormatted || (userBudgetNum ? userBudgetNum.toLocaleString() : '—');
+  const currencySym = (userBudgetLabel.match(/^[^\d\s]+/) || ['$'])[0];
+  const perDayNum = userBudgetNum ? Math.round(userBudgetNum / Math.max(1, days)) : 0;
+  const perDayLabel = perDayNum ? currencySym + perDayNum.toLocaleString() : '—';
+  // Store for the interactive budget tracker
+  window._gqgBudget = { total: userBudgetNum, perDay: perDayNum, currency: currencySym, label: userBudgetLabel, days };
+  document.getElementById('p6total').innerHTML =
+    userBudgetNum
+      ? `${userBudgetLabel} total · <span style="color:rgba(255,255,255,0.6)">~${perDayLabel}/day</span>`
+      : `~${totalCost*10} units total for ${days} days`;
+  document.getElementById('p6best').textContent = bestTimeDB[country] || bestTimeDB._default;
+  const packBase = packDB[vibe] || packDB._default || packDB.chill;
+  const packAddon = packWhoAddon[(prefs.who||'').replace(/\s+.*/,'')] || '';
+  document.getElementById('p6pack').textContent = packAddon ? packBase + ' · ' + packAddon : packBase;
+
+  // Initialise deduped challenge queue for the whole itinerary
+  const totalStops = days * 4; // 4 stops per day max
+  window._challengeQueue = _buildChallengeQueue(city.name, vibe, totalStops);
+  window._challengeCursor = 0;
+
+  // v14: Render stacked, full-width day cards
+  const grid = document.getElementById('p6puzzle');
+  const cardHeader = `
+    <div class="gqg-trip-banner">
+      <div class="gqg-trip-emoji">${meta.emoji}</div>
+      <div class="gqg-trip-text">
+        <div class="gqg-trip-eyebrow">YOUR ${days}-DAY ITINERARY</div>
+        <div class="gqg-trip-name">${city.name}</div>
+        <div class="gqg-trip-sub">${vibe} pacing · curated stops · zero repeats</div>
+      </div>
+    </div>
+  `;
+  const dayCards = dayList.map((d, di) => {
+    const meals = ['Breakfast','Lunch','Snack','Dinner'];
+    const mealIcons = ['🥐','🍱','☕','🍷'];
+    const accentHues = ['#00d4b8','#8b5cf6','#f0c040','#ff6b6b','#4dabf7','#51cf66','#fab005','#e64980'];
+    const hue = accentHues[di % accentHues.length];
+    const slotLabels = ['Morning','Late Morning','Afternoon','Evening'];
+    const slotEmojis = ['🌅','☀️','🌇','🌃'];
+    const startHours = ['9:00 AM','11:30 AM','2:30 PM','7:00 PM'];
+    const dayBudgetLabel = (window._gqgBudget && window._gqgBudget.perDay)
+      ? window._gqgBudget.currency + window._gqgBudget.perDay.toLocaleString() + '/day'
+      : '~$' + d.costEstimate;
+    return `
+      <article class="gqg-day-card" style="--accent:${hue}" data-day="${di}">
+        <header class="gqg-day-card-head" onclick="toggleGqgDayCard(${di})">
+          <div class="gqg-day-num-badge">${d.n}</div>
+          <div class="gqg-day-card-titlewrap">
+            <div class="gqg-day-card-eyebrow">DAY ${d.n} · ${dayBudgetLabel} · ${d.activities.length} stops · ${d.foods.length} food picks</div>
+            <h3 class="gqg-day-card-title">${d.title}</h3>
+            <div class="gqg-day-preview-chips">
+              ${d.activities.slice(0,3).map(a => `<span class="gqg-mini-chip">📍 ${a.length>32?a.slice(0,30)+'…':a}</span>`).join('')}
+              ${d.activities.length>3?`<span class="gqg-mini-chip gqg-mini-chip-more">+${d.activities.length-3} more</span>`:''}
+            </div>
+          </div>
+          <button class="gqg-day-toggle" aria-label="Expand">▾</button>
+        </header>
+        <div class="gqg-day-card-body">
+          <div class="gqg-day-section-label">📍 Stops & flow <span style="font-weight:400;color:rgba(255,255,255,0.5);font-size:0.75rem;">(tap to check off)</span></div>
+          <ol class="gqg-day-stops">
+            ${d.activities.map((a,j)=>`
+                <li class="gqg-day-stop itin-checkable" data-key="d${di}-a${j}" onclick="toggleItinCheck(this)">
+                  <div class="gqg-stop-time">${slotEmojis[j]||'•'} ${slotLabels[j]||'Bonus'} · ${startHours[j]||''}</div>
+                  <div class="gqg-stop-name">${a} <span class="gqg-tl-tag">${placeTag(a)}</span>${(()=>{ const s=placeSafetyScore(a,city.name); return `<span class="safety-chip ${s.cls}"><span class="safety-dot"></span>${s.score} · ${s.label}</span>`; })()}</div>
+                  <div class="gqg-stop-desc">${(d.genericFlow && d.genericFlow[j]) ? d.genericFlow[j] + ' at ' + a + '.' : 'A real, named stop in ' + city.name + ' worth your time.'}</div>
+                  <div class="gqg-challenges-box" onclick="event.stopPropagation()">
+                    <div class="gqg-challenges-header"><span class="ch-icon">⚡</span> Challenges</div>
+                    ${getChallengesForStop(a, di, j, city.name, vibe).map((ch, ci) => `
+                      <div class="gqg-challenge-item" data-chkey="d${di}-s${j}-ch${ci}">
+                        <div class="gqg-challenge-circle" onclick="toggleChallenge(this.parentElement)"></div>
+                        <div class="gqg-challenge-content">
+                          <span class="gqg-challenge-text">${ch.text}</span>
+                          <button class="ch-submit-proof-btn" onclick="event.stopPropagation();openProofModal('d${di}-s${j}-ch${ci}','${ch.text.replace(/'/g,"\\'")}',${ch.xp})">📸 Submit Proof</button>
+                          <span class="ch-verified-badge">✅ Verified</span>
+                        </div>
+                        <span class="gqg-challenge-xp">+${ch.xp} XP</span>
+                      </div>
+                    `).join('')}
+                  </div>
+                </li>
+              `).join('')}
+          </ol>
+          <div class="gqg-eat-header">
+            <div class="gqg-eat-label"><span class="eat-icon">🗺️</span> Where to eat today</div>
+          </div>
+          <div class="gqg-day-food-row">
+            ${d.foods.map((food,fi)=>`
+              <div class="gqg-day-food-card itin-checkable" data-key="d${di}-f${fi}" onclick="toggleItinCheck(this)">
+                <div class="gqg-day-food-meal">${mealIcons[fi]||'🍴'} ${meals[fi]||'Snack'}</div>
+                <div class="gqg-day-food-name">${food}</div>
+                <div class="gqg-day-food-tip">Real spot · book ahead at peak hours</div>
+              </div>
+            `).join('')}
+          </div>
+          <div class="gqg-day-tip-pill">💡 Tip · ${dayTipFor(d, city, vibe)}</div>
+          <div id="phraseSlot_d${di}"></div>
+          <div class="itin-day-budget">
+            <div class="itin-day-budget-row">
+              <span>Day ${d.n} progress</span>
+              <span class="itin-day-progress" data-day-progress="${di}">0 / ${d.activities.length + d.foods.length} done</span>
+            </div>
+            <div class="itin-day-bar"><div class="itin-day-bar-fill" data-day-bar="${di}" style="width:0%"></div></div>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join('');
+  // Store cards HTML for pagination
+  window._gqgDayCardsHTML = dayCards.split('</article>').filter(s => s.trim()).map(s => s + '</article>');
+  window._gqgCardHeader = cardHeader;
+  window._gqgCurrentDay = 0;
+  window._gqgTotalDays = dayList.length;
+  window._gqgItinerary = {city, days:dayList, vibe, meta, country, notes};
+  window._gqgChecks = window._gqgChecks || {};
+
+  // Build paginated view with side arrows
+  const paginatorHTML = buildItinPaginator();
+  grid.innerHTML = cardHeader + paginatorHTML;
+  showItinDay(0);
+
+  document.getElementById('dot5').style.display = '';
+  document.getElementById('dot6').style.display = '';
+  goTo(6);
+}
+
+function buildItinPaginator() {
+  const total = window._gqgTotalDays || 1;
+  let dots = '';
+  for (let i = 0; i < total; i++) {
+    dots += `<div class="itin-page-dot ${i===0?'active':''}" onclick="showItinDay(${i})"></div>`;
+  }
+  return `
+    <div class="itin-wrapper" id="itinWrapper">
+      <button class="itin-side-arrow left" id="itinArrowLeft" onclick="showItinDay(window._gqgCurrentDay - 1)" disabled>‹</button>
+      <button class="itin-side-arrow right" id="itinArrowRight" onclick="showItinDay(window._gqgCurrentDay + 1)">›</button>
+      <div id="itinDayContainer"></div>
+      <div class="itin-page-indicator" id="itinDots">${dots}</div>
+      <div class="itin-page-label" id="itinLabel">Day 1 of ${total}</div>
+    </div>
+  `;
+}
+
+// ===== Itinerary timeline button sounds =====
+function playItinSwoosh(direction) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    const startF = direction === 'back' ? 520 : 380;
+    const endF   = direction === 'back' ? 760 : 880;
+    osc.frequency.setValueAtTime(startF, t);
+    osc.frequency.exponentialRampToValueAtTime(endF, t + 0.18);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.18, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(t); osc.stop(t + 0.24);
+    // soft sparkle layer
+    const o2 = ctx.createOscillator();
+    const g2 = ctx.createGain();
+    o2.type = 'sine';
+    o2.frequency.setValueAtTime(direction === 'back' ? 1320 : 1760, t);
+    g2.gain.setValueAtTime(0.0001, t);
+    g2.gain.exponentialRampToValueAtTime(0.06, t + 0.03);
+    g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+    o2.connect(g2); g2.connect(ctx.destination);
+    o2.start(t); o2.stop(t + 0.2);
+  } catch(e) {}
+}
+function playItinTick() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(1100, t);
+    osc.frequency.exponentialRampToValueAtTime(1500, t + 0.04);
+    gain.gain.setValueAtTime(0.08, t);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(t); osc.stop(t + 0.08);
+  } catch(e) {}
+}
+
+function showItinDay(idx) {
+  const total = window._gqgTotalDays;
+  if (idx < 0 || idx >= total) return;
+  const prev = window._gqgCurrentDay;
+  if (idx !== prev) playItinSwoosh(idx < prev ? 'back' : 'fwd');
+  window._gqgCurrentDay = idx;
+  const container = document.getElementById('itinDayContainer');
+  if (!container) return;
+  
+  container.innerHTML = window._gqgDayCardsHTML[idx] || '';
+  
+  // Inject phrase card into the placeholder slot
+  const itin = window._gqgItinerary;
+  if (itin) {
+    const slot = container.querySelector('#phraseSlot_d' + idx);
+    if (slot) slot.outerHTML = buildPhraseCard(itin.city.name, idx);
+  }
+  
+  // Auto-expand the card and mark as single
+  const card = container.querySelector('.gqg-day-card');
+  if (card) {
+    card.classList.add('itin-single', 'itin-active');
+  }
+  
+  // Restore checked state for items on this day
+  window._gqgChecks = window._gqgChecks || {};
+  container.querySelectorAll('.itin-checkable').forEach(el => {
+    if (window._gqgChecks[el.dataset.key]) el.classList.add('itin-checked');
+  });
+  // Restore challenge completion state
+  window._chDone = window._chDone || {};
+  container.querySelectorAll('.gqg-challenge-item').forEach(el => {
+    if (window._chDone[el.dataset.chkey]) el.classList.add('ch-done');
+  });
+  refreshDayProgress(idx);
+  refreshTripProgress();
+  
+  // Update side arrows
+  const leftArrow = document.getElementById('itinArrowLeft');
+  const rightArrow = document.getElementById('itinArrowRight');
+  const label = document.getElementById('itinLabel');
+  const dotsWrap = document.getElementById('itinDots');
+  
+  if (leftArrow) leftArrow.disabled = idx === 0;
+  if (rightArrow) rightArrow.disabled = idx === total - 1;
+  if (label) label.textContent = `Day ${idx + 1} of ${total}`;
+  if (dotsWrap) {
+    dotsWrap.querySelectorAll('.itin-page-dot').forEach((dot, i) => {
+      dot.classList.toggle('active', i === idx);
+    });
+  }
+  
+  // Scroll to itinerary wrapper
+  const wrapper = document.getElementById('itinWrapper');
+  if (wrapper) wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ===== Interactive itinerary: check off stops/foods, day & trip progress =====
+function toggleItinCheck(el) {
+  if (!el || !el.dataset || !el.dataset.key) return;
+  window._gqgChecks = window._gqgChecks || {};
+  const key = el.dataset.key;
+  const now = !window._gqgChecks[key];
+  window._gqgChecks[key] = now;
+  el.classList.toggle('itin-checked', now);
+  if (now) playItinTick();
+  const dayIdx = parseInt(key.split('-')[0].slice(1), 10);
+  refreshDayProgress(dayIdx);
+  refreshTripProgress();
+  if (window.event && window.event.stopPropagation) window.event.stopPropagation();
+}
+
+function refreshDayProgress(dayIdx) {
+  const day = (window._gqgItinerary && window._gqgItinerary.days[dayIdx]);
+  if (!day) return;
+  const total = day.activities.length + day.foods.length;
+  let done = 0;
+  for (let a = 0; a < day.activities.length; a++) if (window._gqgChecks[`d${dayIdx}-a${a}`]) done++;
+  for (let f = 0; f < day.foods.length; f++) if (window._gqgChecks[`d${dayIdx}-f${f}`]) done++;
+  const pct = total ? Math.round((done/total)*100) : 0;
+  const txt = document.querySelector(`[data-day-progress="${dayIdx}"]`);
+  const bar = document.querySelector(`[data-day-bar="${dayIdx}"]`);
+  if (txt) txt.textContent = `${done} / ${total} done`;
+  if (bar) bar.style.width = pct + '%';
+}
+
+function refreshTripProgress() {
+  const it = window._gqgItinerary;
+  if (!it) return;
+  let total = 0, done = 0;
+  it.days.forEach((day, di) => {
+    total += day.activities.length + day.foods.length;
+    for (let a = 0; a < day.activities.length; a++) if (window._gqgChecks[`d${di}-a${a}`]) done++;
+    for (let f = 0; f < day.foods.length; f++) if (window._gqgChecks[`d${di}-f${f}`]) done++;
+  });
+  const pct = total ? Math.round((done/total)*100) : 0;
+  const bar = document.getElementById('tripProgBar');
+  const lbl = document.getElementById('tripProgLabel');
+  if (bar) bar.style.width = pct + '%';
+  if (lbl) lbl.textContent = `${done} of ${total} planned moments checked off · ${pct}%`;
+  const budget = window._gqgBudget;
+  if (budget && budget.total) {
+    const spent = Math.round(budget.total * (pct/100));
+    const spentEl = document.getElementById('tripBudgetSpent');
+    if (spentEl) spentEl.textContent = `${budget.currency}${spent.toLocaleString()} of ${budget.label} used (est.)`;
+  }
+}
+
+// Keyboard arrow navigation between days when on page 6
+document.addEventListener('keydown', function(e) {
+  const p6 = document.getElementById('page6');
+  if (!p6 || !p6.classList.contains('active')) return;
+  if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  if (e.key === 'ArrowLeft' && window._gqgCurrentDay > 0) showItinDay(window._gqgCurrentDay - 1);
+  else if (e.key === 'ArrowRight' && window._gqgCurrentDay < (window._gqgTotalDays-1)) showItinDay(window._gqgCurrentDay + 1);
+});
+
+function toggleGqgDayCard(i){
+  // No-op in paginated mode
+}
+function dayTipFor(d, city, vibe){
+  const tips = [
+    `Start ${city.name} early to beat crowds at ${d.activities[0]||'the first stop'}.`,
+    `Pace yourself — ${d.activities[1]||'the midday stop'} rewards a slow lunch nearby.`,
+    `Save energy for ${d.activities[d.activities.length-1]||'the evening stop'} after sunset.`,
+    `Pair ${d.activities[0]||'the morning stop'} with ${d.foods[0]||'a local breakfast'} for the perfect start.`,
+    `Cabs are easiest between ${d.activities[0]||'stop 1'} and ${d.activities[1]||'stop 2'}.`,
+    `Book ${d.foods[3]||d.foods[2]||'dinner'} ahead — it fills up fast.`,
+    `Carry small change — most ${vibe} trips run on cash near ${d.activities[0]||'these spots'}.`,
+    `Wrap Day ${d.n} with a sunset stop near ${d.activities[d.activities.length-1]||'the last venue'}.`
+  ];
+  return tips[(d.n-1) % tips.length];
+}
+
+// Day-detail modal
+function openGqgDay(i) {
+  const it = window._gqgItinerary; if (!it) return;
+  const d = it.days[i];
+  const card = document.getElementById('gqgModalCard');
+  const startHours = ['9:00 AM','11:30 AM','2:00 PM','7:00 PM'];
+  const endHours   = ['10:30 AM','1:00 PM','4:00 PM','9:30 PM'];
+  const slotLabels = ['Morning', 'Late Morning', 'Afternoon', 'Evening'];
+  const slotEmojis = ['🌅', '☀️', '🌇', '🌃'];
+  card.innerHTML = `
+    <button class="gqg-modal-close" onclick="closeGqgModal()">✕</button>
+    <div class="gqg-modal-head">
+      <div class="gqg-modal-num">${d.n}</div>
+      <div>
+        <div class="gqg-modal-eyebrow">DAY ${d.n} · ~$${d.costEstimate}</div>
+        <div class="gqg-modal-title">${d.title}</div>
+        <div class="gqg-modal-weather">${it.meta.emoji} ${it.vibe} pacing · in ${it.city.name}</div>
+      </div>
+    </div>
+    <div class="gqg-place-strip">
+      ${d.activities.map(a => `<span class="gqg-chip">📍 ${a}</span>`).join('')}
+    </div>
+    <div class="gqg-timeline">
+      ${d.activities.map((a,j)=>`
+        <div class="gqg-tl-item">
+          <div class="gqg-tl-time">${slotEmojis[j]||'•'} ${slotLabels[j]||''} · ${startHours[j]||'—'} – ${endHours[j]||'—'}</div>
+          <div class="gqg-tl-title">${a} <span class="gqg-tl-tag">${placeTag(a)}</span></div>
+          <div class="gqg-tl-cost">~$${Math.round(d.costEstimate/4)+j*5}</div>
+          <div class="gqg-tl-desc">${(d.genericFlow && d.genericFlow[j]) ? d.genericFlow[j] + ' at ' + a + '.' : 'Spend a ' + it.meta.adj + ' window at ' + a + '.'} A real, named spot in ${it.city.name} worth your time.</div>
+          <div class="gqg-tl-quote">"${a} is one of the most authentic ${it.vibe} stops in ${it.city.name}."</div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="gqg-food-section">
+      <div class="gqg-food-header">
+        <span class="gqg-food-icon">🍜</span>
+        <div>
+          <div class="gqg-food-title">Where to eat in ${it.city.name}</div>
+          <div class="gqg-food-sub">Hand-picked named restaurants & markets for Day ${d.n}</div>
+        </div>
+      </div>
+      <div class="gqg-food-grid">
+        ${gqgFoodPicksForDay(d, it).map((food, idx) => `
+          <div class="gqg-food-card">
+            <div class="gqg-food-meal">${['🥐 Breakfast / Brunch','🍱 Lunch','🍷 Dinner'][idx] || '🍴 Snack'}</div>
+            <div class="gqg-food-name">${food}</div>
+            <div class="gqg-food-tip">A real spot in ${it.city.name} — book ahead at peak hours.</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    <div class="gqg-modal-box gqg-tip-box">
+      <div class="gqg-modal-box-title">💡 Insider tip</div>
+      <p>Start early and pace yourself — ${it.city.name} rewards travelers who linger over ${it.vibe==='party'?'late nights':'long lunches'} rather than racing between landmarks.</p>
+    </div>
+  `;
+  document.getElementById('gqgModal').classList.add('show');
+}
+
+function gqgFoodPicksForDay(day, it) {
+  // Prefer the per-day curated, deduped food list built in buildPuzzleItinerary
+  if (Array.isArray(day.foods) && day.foods.length) return day.foods.slice(0, 3);
+  // Fallback: pull from cityFoodSpots directly
+  const pool = (typeof getFoodPoolForCity === 'function') ? getFoodPoolForCity(it.city.name) : [];
+  if (pool.length) {
+    const offset = ((day.n||1) - 1) * 3;
+    return [pool[offset % pool.length], pool[(offset+1) % pool.length], pool[(offset+2) % pool.length]];
+  }
+  return [`Top-rated restaurant in ${it.city.name}`, `Famous market in ${it.city.name}`, `Iconic dinner spot in ${it.city.name}`];
+}
+
+function closeGqgModal() { document.getElementById('gqgModal').classList.remove('show'); }
+
+// ===== CHALLENGES SYSTEM =====
+// Large flat pool — 60 unique challenges, no sets, fully deduped across every stop
+const _allChallenges = [
+  // 📸 Photography / observation
+  { text: 'Take a photo from the best angle you can find', xp: 15 },
+  { text: 'Photograph something no tourist guidebook shows', xp: 25 },
+  { text: 'Take a candid photo that tells a story', xp: 15 },
+  { text: 'Capture a reflection — water, glass, or mirror', xp: 20 },
+  { text: 'Photograph a local door or gate that catches your eye', xp: 10 },
+  { text: 'Take a photo of something that makes you smile', xp: 10 },
+  { text: 'Capture the colour palette of this place in one shot', xp: 20 },
+  { text: 'Find the best light and take your favourite photo of the trip', xp: 25 },
+  // 🗣️ Social / local connection
+  { text: 'Ask a local for their favourite memory here', xp: 25 },
+  { text: 'Chat with a vendor or guide for at least 2 minutes', xp: 20 },
+  { text: 'Ask a shopkeeper what they recommend nearby', xp: 20 },
+  { text: 'Find out the name of one local and remember it', xp: 15 },
+  { text: 'Connect with another traveler and swap one tip', xp: 15 },
+  { text: 'Ask someone to point you to a spot tourists rarely visit', xp: 30 },
+  { text: 'Thank someone in the local language', xp: 15 },
+  { text: 'Ask a local what they wish more visitors knew about here', xp: 30 },
+  // 🔍 Exploration / discovery
+  { text: 'Find a hidden alley or unmarked viewpoint', xp: 30 },
+  { text: 'Walk 10 minutes in a direction with no destination', xp: 20 },
+  { text: 'Find one detail most visitors walk straight past', xp: 20 },
+  { text: 'Discover a courtyard, rooftop, or space not on the map', xp: 35 },
+  { text: 'Find the oldest thing you can see in this place', xp: 20 },
+  { text: 'Locate a viewpoint that isn\'t on any sign', xp: 30 },
+  { text: 'Go somewhere on foot that you could have taken transport', xp: 15 },
+  { text: 'Enter a door you\'ve never noticed before (if open to public)', xp: 25 },
+  // 🧠 Learning / culture
+  { text: 'Learn 3 words of the local language here', xp: 20 },
+  { text: 'Find out one historical fact about this specific place', xp: 15 },
+  { text: 'Watch or join a local cultural activity', xp: 30 },
+  { text: 'Read every information sign or plaque you can find here', xp: 15 },
+  { text: 'Learn the local name for this place, not just the tourist one', xp: 20 },
+  { text: 'Ask someone to teach you one local custom or tradition', xp: 25 },
+  { text: 'Find out what this place is known for that surprises you', xp: 20 },
+  // 🍜 Food / drink
+  { text: 'Order something you can\'t pronounce', xp: 20 },
+  { text: 'Eat at a place with no English menu', xp: 30 },
+  { text: 'Try a street food you\'ve never had before', xp: 25 },
+  { text: 'Visit a local market and buy something fresh to eat', xp: 25 },
+  { text: 'Try the chef\'s daily special', xp: 20 },
+  { text: 'Have a meal at a place with no tourist reviews', xp: 30 },
+  { text: 'Order whatever the person next to you is eating', xp: 25 },
+  { text: 'Find the cheapest meal locals actually eat here', xp: 20 },
+  // ✍️ Memory / journaling
+  { text: 'Write 3 sentences about today\'s highlight right now', xp: 20 },
+  { text: 'Collect one small free souvenir — ticket, leaf, or flyer', xp: 15 },
+  { text: 'Voice-note your first impression of this place', xp: 15 },
+  { text: 'Draw a rough sketch of what you see in front of you', xp: 25 },
+  { text: 'Journal your first impression in exactly one sentence', xp: 10 },
+  { text: 'List 5 things you can hear right now', xp: 10 },
+  { text: 'Write down one thing that surprised you here', xp: 15 },
+  // 🧘 Mindfulness / experience
+  { text: 'Spend 5 minutes just sitting and observing without your phone', xp: 20 },
+  { text: 'Close your eyes for 60 seconds and just listen', xp: 15 },
+  { text: 'Find the quietest spot in this place and sit there', xp: 20 },
+  { text: 'Try something here you\'ve never done before in your life', xp: 35 },
+  { text: 'Push your comfort zone — do one thing that feels slightly scary', xp: 30 },
+  { text: 'Stay in one spot for 10 minutes and notice what changes', xp: 20 },
+  // 🎯 Spontaneous / fun
+  { text: 'Follow a local for 2 minutes (discreetly!) and see where they go', xp: 25 },
+  { text: 'Buy something from a stall without knowing what it is first', xp: 25 },
+  { text: 'Find the most photogenic spot and wait for the perfect moment', xp: 20 },
+  { text: 'Pick a colour and photograph 5 things in that colour here', xp: 20 },
+  { text: 'Find a cat, dog, or bird and spend 2 minutes with it', xp: 10 },
+  { text: 'Find somewhere to sit and people-watch for 5 minutes', xp: 15 },
+  { text: 'Buy a local postcard and write a note to yourself on it', xp: 20 },
+  { text: 'Ask for a recommendation with no context — just "surprise me"', xp: 30 },
+];
+
+// Deterministic shuffle using a string seed
+function _seededShuffleCh(arr, seed) {
+  let s = 0;
+  for (let i = 0; i < seed.length; i++) s = (s * 31 + seed.charCodeAt(i)) >>> 0;
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    s = (s * 1103515245 + 12345) >>> 0;
+    const j = s % (i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Called once per itinerary build; returns a deduped flat list of challenges for all stops
+function _buildChallengeQueue(cityName, vibe, totalStops) {
+  const shuffled = _seededShuffleCh(_allChallenges, cityName + '|' + vibe);
+  // If we somehow need more than pool size, cycle through again with different seed
+  const queue = [];
+  let pass = 0;
+  while (queue.length < totalStops * 3) {
+    const batch = _seededShuffleCh(_allChallenges, cityName + '|' + vibe + '|pass' + pass);
+    batch.forEach(ch => { if (!queue.find(q => q.text === ch.text)) queue.push(ch); });
+    pass++;
+    if (pass > 10) break; // safety
+  }
+  return queue;
+}
+
+// Initialised in buildPuzzleItinerary before rendering
+window._challengeQueue = [];
+window._challengeCursor = 0;
+
+function _nextChallenges(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push(window._challengeQueue[window._challengeCursor % window._challengeQueue.length]);
+    window._challengeCursor++;
+  }
+  return out;
+}
+
+function getChallengesForStop(placeName, dayIdx, stopIdx, cityName, vibe) {
+  // Always returns the next 3 from the deduped queue (cursor advances each call)
+  return _nextChallenges(3);
+}
+
+function getChallengesForDay(d, di, cityName, vibe) {
+  const pools = [
+    _challengePool.culture,
+    _challengePool.exploration,
+    _challengePool.food,
+    _challengePool.memory,
+  ];
+  const picked = [];
+  for (let i = 0; i < 3; i++) {
+    const pool = pools[(di + i) % pools.length];
+    picked.push(pool[(di * 3 + i) % pool.length]);
+  }
+  // Customise first challenge text to reference actual activity
+  if (d.activities && d.activities[0]) {
+    picked[0] = { text: `Watch or join a local cultural activity at ${d.activities[d.activities.length - 1]}`, xp: 30 };
+  }
+  return picked;
+}
+
+window._chDone = window._chDone || {};
+function toggleChallenge(el) {
+  const key = el.dataset.chkey;
+  if (!key) return;
+  const xp = parseInt(el.querySelector('.gqg-challenge-xp').textContent) || 20;
+  const wasDone = window._chDone[key];
+  window._chDone[key] = !wasDone;
+  el.classList.toggle('ch-done', !wasDone);
+  // Play soft tick
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.frequency.value = wasDone ? 440 : 880;
+    g.gain.setValueAtTime(0.12, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+    o.start(); o.stop(ctx.currentTime + 0.18);
+  } catch(e) {}
+  refreshMyXP();
+}
+
+function getMyXP() {
+  let xp = 0;
+  document.querySelectorAll('.gqg-challenge-item.ch-done').forEach(el => {
+    const v = parseInt(el.querySelector('.gqg-challenge-xp').textContent) || 20;
+    xp += v;
+  });
+  return xp;
+}
+
+function refreshMyXP() {
+  const xp = getMyXP();
+  const badge = document.getElementById('myXpBadge');
+  if (badge) badge.textContent = xp + ' XP';
+  refreshBadges(xp);
+}
+
+function refreshBadges(xp) {
+  if (xp === undefined) xp = getMyXP();
+  const pills = document.querySelectorAll('.badges-bar .badge-pill');
+  pills.forEach((pill, i) => {
+    const threshold = parseInt(pill.dataset.xp) || 0;
+    const wasUnlocked = pill.classList.contains('unlocked');
+    if (xp >= threshold) {
+      if (!wasUnlocked) {
+        pill.classList.remove('locked');
+        pill.classList.add('unlocked');
+        // play a soft unlock chime
+        try {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const notes = [523, 659, 784, 1047];
+          notes.forEach((freq, ni) => {
+            const o = ctx.createOscillator(); const g = ctx.createGain();
+            o.connect(g); g.connect(ctx.destination);
+            o.type = 'sine'; o.frequency.value = freq;
+            const t = ctx.currentTime + ni * 0.08;
+            g.gain.setValueAtTime(0, t);
+            g.gain.linearRampToValueAtTime(0.07, t + 0.03);
+            g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+            o.start(t); o.stop(t + 0.25);
+          });
+        } catch(e) {}
+      }
+    } else {
+      pill.classList.add('locked');
+      pill.classList.remove('unlocked');
+    }
+  });
+}
+
+// ===== LEADERBOARD =====
+const _lbPlayers = [
+  { name: 'Arjun T.', avatar: '🧭', xpBase: 312, badges: 5 },
+  { name: 'Sofia M.', avatar: '🌸', xpBase: 285, badges: 4 },
+  { name: 'Lior K.',  avatar: '✈️', xpBase: 251, badges: 4 },
+  { name: 'Yuki N.', avatar: '🎋', xpBase: 198, badges: 3 },
+  { name: 'Daniyar S.', avatar: '🏔️', xpBase: 175, badges: 3 },
+  { name: 'Adaeze O.', avatar: '🌸', xpBase: 134, badges: 2 },
+];
+const _medals = ['🥇','🥈','🥉'];
+
+function openLbModal() {
+  const myXP = getMyXP();
+  const myBadges = Object.values(window._chDone || {}).filter(Boolean).length;
+  // Build sorted list with "You"
+  const all = [
+    ..._lbPlayers.map(p => ({ ...p, isYou: false })),
+    { name: 'You (you)', avatar: '✈️', xpBase: myXP, badges: myBadges, isYou: true },
+  ].sort((a, b) => b.xpBase - a.xpBase);
+
+  const list = document.getElementById('lbList');
+  list.innerHTML = all.map((p, i) => {
+    const medalHtml = _medals[i] || `<span style="color:rgba(255,255,255,0.4);font-family:Nunito,sans-serif;font-weight:900;font-size:0.95rem">${i+1}</span>`;
+    return `
+    <div class="lb-row ${p.isYou ? 'lb-you' : ''}">
+      <div class="lb-medal">${medalHtml}</div>
+      <div class="lb-avatar">${p.avatar}</div>
+      <div class="lb-info">
+        <div class="lb-name">${p.name}</div>
+        <div class="lb-badges">${p.badges} badge${p.badges !== 1 ? 's' : ''}</div>
+      </div>
+      <div class="lb-xp-val">${p.xpBase} XP</div>
+    </div>`;
+  }).join('');
+  document.getElementById('lbModal').classList.add('show');
+}
+
+function closeLbModal() { document.getElementById('lbModal').classList.remove('show'); }
+
+
+// ===== PROOF MODAL =====
+window._proofState = { chKey: null, xp: 0, imageBase64: null };
+
+function openProofModal(chKey, challengeText, xp) {
+  window._proofState = { chKey, xp, imageBase64: null };
+  document.getElementById('proofChallengeLabel').textContent = challengeText;
+  document.getElementById('proofPreviewImg').style.display = 'none';
+  document.getElementById('proofDropIcon').style.display = '';
+  document.getElementById('proofDropText').style.display = '';
+  document.getElementById('proofSubmitBtn').disabled = true;
+  document.getElementById('proofFileInput').value = '';
+  const status = document.getElementById('proofStatus');
+  status.className = 'proof-status';
+  status.innerHTML = '';
+  document.getElementById('proofModal').classList.add('show');
+}
+
+function closeProofModal() {
+  document.getElementById('proofModal').classList.remove('show');
+}
+
+function onProofFileChosen(evt) {
+  const file = evt.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target.result;
+    const base64 = dataUrl.split(',')[1];
+    const mediaType = file.type && file.type.startsWith('image/') ? file.type : 'image/jpeg';
+    window._proofState.imageBase64 = base64;
+    window._proofState.mediaType = mediaType;
+    const img = document.getElementById('proofPreviewImg');
+    img.src = dataUrl;
+    img.style.display = 'block';
+    document.getElementById('proofDropIcon').style.display = 'none';
+    document.getElementById('proofDropText').style.display = 'none';
+    document.getElementById('proofSubmitBtn').disabled = false;
+    const status = document.getElementById('proofStatus');
+    status.className = 'proof-status';
+    status.innerHTML = '';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function submitProofToAI() {
+  const { chKey, xp, imageBase64, mediaType } = window._proofState;
+  if (!imageBase64) return;
+  const challengeText = document.getElementById('proofChallengeLabel').textContent;
+  const status = document.getElementById('proofStatus');
+  const btn = document.getElementById('proofSubmitBtn');
+
+  status.className = 'proof-status loading';
+  status.innerHTML = '<div class="proof-spinner"></div> AI is verifying your photo…';
+  btn.disabled = true;
+
+  try {
+    const response = await fetch('http://localhost:5001/api/verify-challenge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imageBase64: imageBase64,
+        mimeType: mediaType || 'image/jpeg',
+        challengeText: challengeText
+      })
+    });
+
+    let result;
+    try {
+      result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error ? result.error.message : 'Server error ' + response.status);
+      }
+    } catch(e) {
+      throw e;
+    }
+
+    if (result.approved) {
+      status.className = 'proof-status success';
+      status.innerHTML = `✅ ${result.reason || 'Challenge completed!'}`;
+      setTimeout(() => {
+        const el = document.querySelector(`.gqg-challenge-item[data-chkey="${chKey}"]`);
+        if (el && !el.classList.contains('ch-done')) {
+          const xpVal = parseInt(el.querySelector('.gqg-challenge-xp').textContent) || xp;
+          window._chDone[chKey] = true;
+          el.classList.add('ch-done');
+          try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const notes = [523, 659, 784, 1047];
+            notes.forEach((freq, ni) => {
+              const o = ctx.createOscillator(); const g = ctx.createGain();
+              o.connect(g); g.connect(ctx.destination);
+              o.type = 'sine'; o.frequency.value = freq;
+              const t = ctx.currentTime + ni * 0.08;
+              g.gain.setValueAtTime(0, t);
+              g.gain.linearRampToValueAtTime(0.07, t + 0.03);
+              g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+              o.start(t); o.stop(t + 0.25);
+            });
+          } catch(e) {}
+          refreshMyXP();
+        }
+        setTimeout(closeProofModal, 1200);
+      }, 800);
+    } else {
+      status.className = 'proof-status error';
+      status.innerHTML = `❌ ${result.reason || 'Photo does not match the challenge. Please try again with a relevant photo.'}`;
+      btn.disabled = false;
+    }
+  } catch(err) {
+    status.className = 'proof-status error';
+    status.innerHTML = '❌ Verification failed. Check your connection and try again.';
+    btn.disabled = false;
+  }
+}
+
+window.openProofModal = openProofModal;
+window.closeProofModal = closeProofModal;
+window.onProofFileChosen = onProofFileChosen;
+window.submitProofToAI = submitProofToAI;
+
+// Auto-render city list when entering page 5
+(function hookGoTo(){
+  const orig = window.goTo;
+  if (typeof orig !== 'function') return;
+  window.goTo = function(n){
+    orig(n);
+    if (n === 5) renderPickCity();
+  };
+})();
+
+// ── Preload voices early so CJK / Thai / Arabic are ready on first tap ───────
+(function preloadVoices() {
+  if (!window.speechSynthesis) return;
+
+  function injectSpeakButtons() {
+    // For every rendered phrase-row that has no speak button yet,
+    // check if a voice now exists and add the button dynamically.
+    document.querySelectorAll('.phrase-card').forEach(card => {
+      // Derive lang from the card title text "🗣 Local Phrases · <lang>"
+      const titleEl = card.querySelector('.phrase-card-title');
+      if (!titleEl) return;
+      const langMatch = titleEl.textContent.match(/·\s*(.+)$/);
+      if (!langMatch) return;
+      const langHint = langMatch[1].trim();
+
+      const parts = langHint.split('/').map(p => p.trim());
+      let tags = [];
+      for (const part of parts) {
+        const mapped = (typeof _langBCP47 !== 'undefined') && (_langBCP47[part] || _langBCP47[langHint]);
+        if (mapped) tags = tags.concat(mapped);
+      }
+      if (!tags.length) return;
+      const voice = (typeof _getVoiceForLangs === 'function') && _getVoiceForLangs(tags);
+      if (!voice) return;
+
+      // Voice found — add speak buttons to any rows that are missing them
+      card.querySelectorAll('.phrase-row').forEach(row => {
+        if (row.querySelector('.phrase-speak-btn')) return; // already has one
+        const localEl = row.querySelector('.phrase-local');
+        if (!localEl) return;
+        const rawText = localEl.textContent
+          .replace(/___/g, '')
+          .replace(/[/\\~？！]/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const btn = document.createElement('button');
+        btn.className = 'phrase-speak-btn';
+        btn.title = 'Listen';
+        btn.textContent = '🔊';
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          speakPhrase(rawText, langHint, btn);
+        };
+        row.onclick = () => speakPhrase(rawText, langHint, btn);
+        row.appendChild(btn);
+      });
+
+      // Update subtitle
+      const sub = card.querySelector('.phrase-card-sub');
+      if (sub && !sub.textContent.includes('🔊')) {
+        sub.textContent = '5 essential phrases · tap 🔊 to hear';
+      }
+    });
+  }
+
+  const kick = () => {
+    window.speechSynthesis.getVoices();
+    // Try injecting buttons after voices load
+    setTimeout(injectSpeakButtons, 100);
+  };
+  kick();
+  if ('onvoiceschanged' in window.speechSynthesis) {
+    window.speechSynthesis.onvoiceschanged = () => {
+      kick();
+      window.speechSynthesis.onvoiceschanged = null;
+    };
+  }
+
+  // Chrome TTS engine primer for non-Latin scripts
+  setTimeout(() => {
+    try {
+      const primer = new SpeechSynthesisUtterance('\u200b');
+      primer.volume = 0;
+      primer.rate   = 1;
+      primer.onend = primer.onerror = () => {};
+      window.speechSynthesis.speak(primer);
+      setTimeout(() => {
+        try { window.speechSynthesis.cancel(); } catch(e) {}
+        injectSpeakButtons(); // try once more after primer
+      }, 300);
+    } catch(e) {}
+  }, 800);
+})();
+
+
+
+// ====== PAGE 7 — VISUAL PLACE SEARCH ======
+(function() {
+  var uploadedBase64 = null;
+  var uploadedMime = null;
+
+  function vsShow(id) { var el = document.getElementById(id); if (el) el.classList.add('show'); }
+  function vsHide(id) { var el = document.getElementById(id); if (el) el.classList.remove('show'); }
+
+
+  function handleFile(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var img = new Image();
+      img.onload = function() {
+        var MAX = 1120;
+        var w = img.width, h = img.height;
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+          else { w = Math.round(w * MAX / h); h = MAX; }
+        }
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        var resized = canvas.toDataURL('image/jpeg', 0.82);
+        uploadedBase64 = resized.split(',')[1];
+        uploadedMime = 'image/jpeg';
+        document.getElementById('vsPreviewImg').src = resized;
+        document.getElementById('vsPreviewWrap').classList.add('show');
+        document.getElementById('vsDropZone').style.display = 'none';
+        document.getElementById('vsAnalyzeBtn').classList.add('show');
+        vsHide('vsIdBanner'); vsHide('vsResults'); vsHide('vsError'); vsHide('vsLoading');
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  document.getElementById('vsFileInput').addEventListener('change', function(e) {
+    if (e.target.files[0]) handleFile(e.target.files[0]);
+    e.target.value = '';
+  });
+  document.getElementById('vsCameraInput').addEventListener('change', function(e) {
+    if (e.target.files[0]) handleFile(e.target.files[0]);
+    e.target.value = '';
+  });
+
+  var dropZone = document.getElementById('vsDropZone');
+  dropZone.addEventListener('dragover', function(e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', function() { dropZone.classList.remove('drag-over'); });
+  dropZone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+
+  document.getElementById('vsResetBtn').addEventListener('click', function() {
+    uploadedBase64 = null; uploadedMime = null;
+    document.getElementById('vsPreviewImg').src = '';
+    document.getElementById('vsPreviewWrap').classList.remove('show');
+    document.getElementById('vsDropZone').style.display = '';
+    document.getElementById('vsAnalyzeBtn').classList.remove('show');
+    try { document.getElementById('vsFileInput').value = ''; } catch(e) {}
+    try { document.getElementById('vsCameraInput').value = ''; } catch(e) {}
+    vsHide('vsIdBanner'); vsHide('vsResults'); vsHide('vsError'); vsHide('vsLoading');
+  });
+
+  document.getElementById('vsAnalyzeBtn').addEventListener('click', analyzeImage);
+
+  async function analyzeImage() {
+    if (!uploadedBase64) return;
+    var btn = document.getElementById('vsAnalyzeBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Analysing...';
+    vsHide('vsIdBanner'); vsHide('vsResults'); vsHide('vsError');
+    vsShow('vsLoading');
+
+    var prompt = 'You are an expert travel guide with encyclopaedic knowledge of world destinations.\n\nAnalyse this travel photo and respond with ONLY a JSON object (no markdown, no extra text) in this exact format:\n{\n  "identified": {\n    "name": "Name of the place or landmark (e.g. Santorini, Greece or Angkor Wat, Cambodia)",\n    "emoji": "single relevant emoji",\n    "description": "2-3 sentence description of what makes this place special"\n  },\n  "similar": [\n    {\n      "name": "Place Name",\n      "country": "Country Name",\n      "flag": "flag emoji",\n      "why": "One concise sentence explaining the visual or cultural similarity",\n      "match": "85%",\n      "tag": "Beach",\n      "tagColor": "#00d4b8"\n    }\n  ]\n}\n\nChoose tag from: Beach, Mountain, City, Temple, Heritage, Nature, Island, Village, Desert, Forest.\nReturn exactly 6 similar destinations. Make similarities genuine — consider architecture, landscape, atmosphere, colour palette, and cultural character. Return ONLY the JSON, nothing else.';
+
+    var apiBase =  "http://127.0.0.1:5001";
+
+    try {
+      var resp = await fetch(apiBase + '/api/visual-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageBase64: uploadedBase64, mimeType: uploadedMime })
+      });
+
+      if (!resp.ok) {
+        var errData = await resp.json().catch(function() { return {}; });
+        throw new Error(errData.error ? errData.error.message : ('Server error ' + resp.status));
+      }
+
+      var data = await resp.json();
+      vsHide('vsLoading');
+      displayResults(data);
+
+    } catch(err) {
+      vsHide('vsLoading');
+      document.getElementById('vsErrorMsg').textContent = (err && err.message) ? err.message : 'Something went wrong. Please try again.';
+      vsShow('vsError');
+    }
+
+    btn.disabled = false;
+    btn.textContent = '✨ Identify Place & Find Similar Destinations';
+  }
+
+  var tagStyleMap = {
+    Beach:   { bg: 'rgba(0,212,184,0.18)',   color: '#00d4b8' },
+    Mountain:{ bg: 'rgba(139,92,246,0.18)',  color: '#a78bfa' },
+    City:    { bg: 'rgba(240,192,64,0.18)',  color: '#f0c040' },
+    Temple:  { bg: 'rgba(245,158,11,0.18)',  color: '#fbbf24' },
+    Heritage:{ bg: 'rgba(245,158,11,0.18)',  color: '#f59e0b' },
+    Nature:  { bg: 'rgba(74,222,128,0.18)',  color: '#4ade80' },
+    Island:  { bg: 'rgba(34,211,238,0.18)',  color: '#22d3ee' },
+    Village: { bg: 'rgba(167,139,250,0.18)', color: '#c4b5fd' },
+    Desert:  { bg: 'rgba(251,146,60,0.18)',  color: '#fb923c' },
+    Forest:  { bg: 'rgba(74,222,128,0.18)',  color: '#4ade80' }
+  };
+
+  var tagFallbacks = {
+    Beach:   'beach travel',
+    Mountain:'mountain landscape',
+    City:    'city skyline travel',
+    Temple:  'ancient temple',
+    Heritage:'heritage site architecture',
+    Nature:  'nature landscape scenic',
+    Island:  'tropical island',
+    Village: 'scenic village',
+    Desert:  'desert landscape',
+    Forest:  'forest nature'
+  };
+  function placeImgUrl(name, country, tag) {
+    var natureKw = {
+      Beach:   'beach,ocean,coast,waves',
+      Mountain:'mountain,peak,valley,alpine',
+      City:    'cityscape,skyline,architecture,aerial',
+      Temple:  'temple,ruins,ancient,monument',
+      Heritage:'heritage,ruins,castle,architecture',
+      Nature:  'nature,landscape,wilderness,scenic',
+      Island:  'island,lagoon,tropical,ocean',
+      Village: 'village,countryside,hills,fields',
+      Desert:  'desert,dunes,sand,arid',
+      Forest:  'forest,trees,woodland,greenery'
+    };
+    var kw = natureKw[tag] || 'landscape,scenery,nature';
+    var seed = Math.abs(name.split('').reduce(function(a,c){return a+c.charCodeAt(0);},0));
+    return 'https://loremflickr.com/600/400/' + kw + '?random=' + seed;
+  }
+  function placeFallbackUrl(tag) {
+    var kw = (tagFallbacks[tag] || 'landscape,scenery').replace(/\s+/g, ',');
+    return 'https://loremflickr.com/600/400/' + kw;
+  }
+
+  function displayResults(data) {
+    var id = data.identified || {};
+    document.getElementById('vsIdIcon').textContent = id.emoji || '📍';
+    document.getElementById('vsIdName').textContent = id.name || 'A Beautiful Place';
+    document.getElementById('vsIdDesc').textContent = id.description || '';
+    vsShow('vsIdBanner');
+
+    var similar = data.similar || [];
+    var grid = document.getElementById('vsCardsGrid');
+    grid.innerHTML = similar.map(function(place) {
+      var tc = tagStyleMap[place.tag] || { bg: 'rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.55)' };
+      var imgSrc = placeImgUrl(place.name, place.country, place.tag);
+      var fallback = placeFallbackUrl(place.tag);
+      return '<div class="vs-place-card">' +
+        '<div class="vs-place-img-wrap vs-img-shimmer">' +
+          '<img class="vs-place-card-img" src="' + imgSrc + '" alt="' + (place.name || '') + '" loading="lazy" onload="this.parentElement.classList.remove(\'vs-img-shimmer\')" onerror="this.src=\'' + fallback + '\'">' +
+          '<div class="vs-place-card-overlay"></div>' +
+          '<div class="vs-place-card-match">' + (place.match || '80%') + ' match</div>' +
+        '</div>' +
+        '<div class="vs-place-card-body">' +
+          '<span class="vs-place-card-tag" style="background:' + tc.bg + ';color:' + tc.color + ';">' + (place.tag || '') + '</span>' +
+          '<div class="vs-place-card-name">' + (place.name || '') + '</div>' +
+          '<div class="vs-place-card-country">' + (place.flag || '') + ' ' + (place.country || '') + '</div>' +
+          '<div class="vs-place-card-why">' + (place.why || '') + '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    vsShow('vsResults');
+    setTimeout(function() {
+      document.getElementById('vsResults').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  }
+})();
+
+
+
+(function() {
+  'use strict';
+
+  var SYSTEM_PROMPT = `You are Vayora Guide, a warm, knowledgeable, and enthusiastic AI tourism companion for Vayora – a premium travel planning platform. Your personality is friendly, inspiring, and expertly informative.
+
+Your expertise covers:
+- Destination recommendations (beaches, mountains, cities, cultural sites, hidden gems)
+- Best times to visit destinations worldwide
+- Local cuisine, culture, traditions, and etiquette
+- Travel itineraries and trip planning
+- Budget tips, luxury travel, and everything in between
+- Visa requirements, travel documents, and safety advisories
+- Accommodation types and recommendations
+- Transportation options (flights, trains, road trips)
+- Adventure activities, eco-tourism, solo travel, family travel
+- Packing tips and travel essentials
+
+Guidelines:
+- Be concise yet vivid — paint pictures with words
+- Use relevant emojis sparingly but meaningfully
+- Format responses with bold for destination names or key tips when helpful
+- Always encourage exploration and adventure
+- If asked about something outside travel/tourism, gently steer the conversation back
+- Keep replies focused — avoid walls of text; use short paragraphs
+- Sign off longer answers with an inspiring nudge to explore`;
+
+  var chatHistory = [];
+  var isLoading = false;
+
+  var fab = document.getElementById('vayora-fab');
+  var chatWindow = document.getElementById('vayora-chat-window');
+  var messagesEl = document.getElementById('vc-messages');
+  var inputEl = document.getElementById('vc-input');
+  var sendBtn = document.getElementById('vc-send-btn');
+  var clearBtn = document.getElementById('vc-clear-btn');
+  var notif = document.getElementById('vayora-notif');
+  var chipsEl = document.getElementById('vc-chips');
+
+  // Initial greeting
+  var greeting = "Hi there, explorer! 🌍 I'm your **Vayora Guide** — your personal AI travel companion.\n\nAsk me about destinations, best travel times, local cuisine, hidden gems, visa tips, and more. Where in the world are you dreaming of going?";
+
+  function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function formatBubble(text) {
+    // Bold, italic-teal, newlines
+    return escapeHtml(text)
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/_(.+?)_/g, '<em>$1</em>')
+      .replace(/\n/g, '<br>');
+  }
+
+  function addMessage(role, text) {
+    var msg = document.createElement('div');
+    msg.className = 'vc-msg ' + role;
+
+    var avatarEl = document.createElement('div');
+    avatarEl.className = 'vc-msg-avatar';
+    avatarEl.textContent = role === 'bot' ? '🌍' : '✈';
+
+    var bubble = document.createElement('div');
+    bubble.className = 'vc-bubble';
+    bubble.innerHTML = formatBubble(text);
+
+    msg.appendChild(avatarEl);
+    msg.appendChild(bubble);
+    messagesEl.appendChild(msg);
+    scrollToBottom();
+    return bubble;
+  }
+
+  function showTyping() {
+    var typing = document.createElement('div');
+    typing.className = 'vc-msg bot vc-typing-wrap';
+    typing.id = 'vc-typing';
+    var av = document.createElement('div');
+    av.className = 'vc-msg-avatar';
+    av.textContent = '🌍';
+    var dots = document.createElement('div');
+    dots.className = 'vc-typing-dots';
+    dots.innerHTML = '<span></span><span></span><span></span>';
+    typing.appendChild(av);
+    typing.appendChild(dots);
+    messagesEl.appendChild(typing);
+    scrollToBottom();
+  }
+
+  function hideTyping() {
+    var t = document.getElementById('vc-typing');
+    if (t) t.remove();
+  }
+
+  function scrollToBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function setLoading(val) {
+    isLoading = val;
+    sendBtn.disabled = val;
+    inputEl.disabled = val;
+  }
+
+  var BACKEND_URL = 'http://localhost:5001/chat';
+
+  async function sendMessage(userText) {
+    if (!userText || !userText.trim() || isLoading) return;
+    userText = userText.trim();
+
+    // Hide chips after first use
+    chipsEl.style.display = 'none';
+
+    addMessage('user', userText);
+    chatHistory.push({ role: 'user', content: userText });
+
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+
+    setLoading(true);
+    showTyping();
+
+    // Build history excluding the latest user message (already appended above)
+    var histForApi = chatHistory.slice(0, -1);
+
+    try {
+      var resp = await fetch(BACKEND_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userText,
+          history: histForApi
+        })
+      });
+
+      var data = await resp.json();
+      hideTyping();
+
+      if (data && data.reply) {
+        chatHistory.push({ role: 'assistant', content: data.reply });
+        addMessage('bot', data.reply);
+      } else {
+        var errMsg = (data && data.error) ? data.error : 'Something went wrong. Please try again.';
+        addMessage('bot', '⚠️ ' + errMsg);
+      }
+    } catch(e) {
+      hideTyping();
+      addMessage('bot', "⚠️ Couldn't reach the server. Make sure the backend is running on port 5000.");
+    }
+
+    setLoading(false);
+  }
+
+  // Open/close toggle
+  fab.addEventListener('click', function() {
+    var isOpen = chatWindow.classList.contains('open');
+    if (isOpen) {
+      chatWindow.classList.remove('open');
+      fab.classList.remove('open');
+    } else {
+      chatWindow.classList.add('open');
+      fab.classList.add('open');
+      notif.classList.add('hidden');
+      // Show greeting if first open
+      if (messagesEl.children.length === 0) {
+        setTimeout(function() { addMessage('bot', greeting); }, 180);
+      }
+      setTimeout(function() { inputEl.focus(); }, 300);
+    }
+  });
+
+  // Send on button click
+  sendBtn.addEventListener('click', function() {
+    sendMessage(inputEl.value);
+  });
+
+  // Send on Enter (shift+enter = newline)
+  inputEl.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage(inputEl.value);
+    }
+  });
+
+  // Auto-resize textarea
+  inputEl.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+  });
+
+  // Quick chips
+  chipsEl.addEventListener('click', function(e) {
+    var chip = e.target.closest('.vc-chip');
+    if (!chip) return;
+    var text = chip.textContent.replace(/^[^\s]+\s/, '').trim(); // strip emoji
+    inputEl.value = chip.textContent.trim();
+    sendMessage(chip.textContent.trim());
+  });
+
+  // Clear chat
+  clearBtn.addEventListener('click', function() {
+    chatHistory = [];
+    messagesEl.innerHTML = '';
+    chipsEl.style.display = 'flex';
+    setTimeout(function() { addMessage('bot', greeting); }, 80);
+  });
+
+  // Close when clicking outside
+  document.addEventListener('click', function(e) {
+    if (chatWindow.classList.contains('open') &&
+        !chatWindow.contains(e.target) &&
+        !fab.contains(e.target)) {
+      chatWindow.classList.remove('open');
+      fab.classList.remove('open');
+    }
+  });
+
+})();
