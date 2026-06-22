@@ -29,7 +29,7 @@
   index.html    ← Full frontend app (all-in-one)
   server.js     ← Express API server (AI endpoints)
   package.json  ← Dependencies
-  .env          ← Your API key (never commit this!)
+  .env          ← API key 
   ```
 
   ## API Endpoints
